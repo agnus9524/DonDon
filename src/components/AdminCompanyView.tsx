@@ -83,14 +83,24 @@ export const AdminCompanyView: React.FC<AdminCompanyViewProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>+ 회사 추가</span>
-        </button>
+        {/* company.manage is SUPER_ADMIN only — a non-super-admin should never be able to create a new tenant */}
+        {isSuperAdmin && (
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors self-start sm:self-auto"
+          >
+            <Plus className="w-4 h-4" />
+            <span>+ 회사 추가</span>
+          </button>
+        )}
       </div>
+
+      {!isSuperAdmin && (
+        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 shrink-0" />
+          <span>신규 회사(법인) 등록은 최고관리자(SUPER_ADMIN)만 수행할 수 있습니다. 아래 목록은 조회만 가능합니다.</span>
+        </div>
+      )}
 
       {/* Architecture Explainer Callout */}
       <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
@@ -202,7 +212,7 @@ export const AdminCompanyView: React.FC<AdminCompanyViewProps> = ({
       </div>
 
       {/* Add Company Modal */}
-      {isAddModalOpen && (
+      {isAddModalOpen && isSuperAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
             <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">

@@ -5,45 +5,93 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import {
   INITIAL_COMPANIES,
+  INITIAL_ALL_USERS,
+  INITIAL_ROLES,
+  INITIAL_PERMISSIONS,
+  INITIAL_ROLE_PERMISSIONS,
+  INITIAL_USER_COMPANY_ROLES,
   INITIAL_TEAMS,
+  INITIAL_USER_TEAM_ROLES,
+  INITIAL_FISCAL_PERIODS,
   INITIAL_ACCOUNTS,
   INITIAL_COMPANY_ACCOUNTS,
   INITIAL_BANK_ACCOUNTS,
   INITIAL_VENDORS,
-  CURRENT_USER,
-  INITIAL_USER_COMPANY_ROLES,
-  INITIAL_ALL_USERS,
-  INITIAL_BUDGETS,
   INITIAL_TRANSACTIONS,
+  INITIAL_ATTACHMENTS,
+  INITIAL_BUDGETS,
+  INITIAL_BANK_IMPORTS,
+  INITIAL_BANK_IMPORT_ROWS,
+  INITIAL_AUDIT_LOGS,
+  CURRENT_USER,
 } from './src/data/initialData';
 import {
   Company,
+  User,
+  Role,
+  Permission,
+  RolePermission,
+  UserCompanyRole,
   Team,
+  UserTeamRole,
+  FiscalPeriod,
   Account,
   CompanyAccount,
   BankAccount,
   Vendor,
-  Budget,
   Transaction,
-  UserCompanyRole,
-  User,
+  TransactionAttachment,
+  Budget,
+  BankImport,
+  BankImportRow,
+  AuditLog,
 } from './src/types';
 
-// In-Memory Multi-Tenant Database Store
+// 18-Table In-Memory Multi-Tenant Database Store
 class AccountingDatabase {
+  // 인증/권한
   companies: Company[] = [...INITIAL_COMPANIES];
+  users: User[] = [...INITIAL_ALL_USERS];
+  roles: Role[] = [...INITIAL_ROLES];
+  permissions: Permission[] = [...INITIAL_PERMISSIONS];
+  rolePermissions: RolePermission[] = [...INITIAL_ROLE_PERMISSIONS];
+  userCompanyRoles: UserCompanyRole[] = [...INITIAL_USER_COMPANY_ROLES];
   teams: Team[] = [...INITIAL_TEAMS];
+  userTeamRoles: UserTeamRole[] = [...INITIAL_USER_TEAM_ROLES];
+
+  // 회계 기준정보
   accounts: Account[] = [...INITIAL_ACCOUNTS];
   companyAccounts: CompanyAccount[] = [...INITIAL_COMPANY_ACCOUNTS];
   bankAccounts: BankAccount[] = [...INITIAL_BANK_ACCOUNTS];
   vendors: Vendor[] = [...INITIAL_VENDORS];
-  budgets: Budget[] = [...INITIAL_BUDGETS];
+  fiscalPeriods: FiscalPeriod[] = [...INITIAL_FISCAL_PERIODS];
+
+  // 회계
   transactions: Transaction[] = [...INITIAL_TRANSACTIONS];
-  users: User[] = [...INITIAL_ALL_USERS];
-  userCompanyRoles: UserCompanyRole[] = [...INITIAL_USER_COMPANY_ROLES];
+  transactionAttachments: TransactionAttachment[] = [...INITIAL_ATTACHMENTS];
+  budgets: Budget[] = [...INITIAL_BUDGETS];
+
+  // 은행
+  bankImports: BankImport[] = [...INITIAL_BANK_IMPORTS];
+  bankImportRows: BankImportRow[] = [...INITIAL_BANK_IMPORT_ROWS];
+
+  // 관리
+  auditLogs: AuditLog[] = [...INITIAL_AUDIT_LOGS];
+
+  // Helper to append audit log
+  addAuditLog(entry: Omit<AuditLog, 'id' | 'created_at'>) {
+    const newLog: AuditLog = {
+      id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      created_at: new Date().toISOString(),
+      ...entry,
+    };
+    this.auditLogs.unshift(newLog);
+    return newLog;
+  }
 }
 
 const db = new AccountingDatabase();
@@ -67,7 +115,7 @@ async function startServer() {
     const userId = (req.headers['x-user-id'] as string) || CURRENT_USER.id;
     const user = db.users.find((u) => u.id === userId) || CURRENT_USER;
     req.user = user;
-    req.isSuperAdmin = user.is_system_admin;
+    req.isSuperAdmin = user.is_system_admin || user.is_super_admin;
 
     // Company context from header or query
     const companyId = (req.headers['x-company-id'] as string) || (req.query.company_id as string);
@@ -88,14 +136,19 @@ async function startServer() {
 
   // Health check
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', app: 'don don accounting system', time: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      app: 'don don multi-tenant accounting system',
+      architecture: '18 core tables with tenant isolation',
+      time: new Date().toISOString(),
+    });
   });
 
   // Auth & Profile
   app.get('/api/v1/auth/me', (req: TenantRequest, res: Response) => {
     const user = req.user!;
     const userRoles = db.userCompanyRoles.filter((r) => r.user_id === user.id && r.status === 'ACTIVE');
-    const authorizedCompanies = user.is_system_admin
+    const authorizedCompanies = req.isSuperAdmin
       ? db.companies
       : db.companies.filter((c) => userRoles.some((r) => r.company_id === c.id));
 
@@ -106,17 +159,17 @@ async function startServer() {
         const role = userRoles.find((r) => r.company_id === comp.id);
         return {
           ...comp,
-          my_role: role ? role.role_id : user.is_system_admin ? 'SUPER_ADMIN' : 'VIEWER',
+          my_role: role ? role.role_id : req.isSuperAdmin ? 'SUPER_ADMIN' : 'VIEWER',
         };
       }),
     });
   });
 
-  // Switch/Inspect active company info
+  // Companies List
   app.get('/api/v1/companies', (req: TenantRequest, res: Response) => {
     const user = req.user!;
     const userRoles = db.userCompanyRoles.filter((r) => r.user_id === user.id && r.status === 'ACTIVE');
-    const result = user.is_system_admin
+    const result = req.isSuperAdmin
       ? db.companies
       : db.companies.filter((c) => userRoles.some((r) => r.company_id === c.id));
 
@@ -133,6 +186,10 @@ async function startServer() {
     const { company_code, company_name, business_number, representative_name, address, phone, email } = req.body;
     if (!company_code || !company_name) {
       return res.status(400).json({ error: '회사 코드와 회사명은 필수입니다.' });
+    }
+
+    if (db.companies.some((c) => c.company_code.toUpperCase() === company_code.toUpperCase())) {
+      return res.status(400).json({ error: '이미 존재하는 회사 코드입니다.' });
     }
 
     const newCompany: Company = {
@@ -152,22 +209,22 @@ async function startServer() {
 
     db.companies.push(newCompany);
 
-    // Automatically create default teams
+    // Default Teams
     const defaultTeams: Team[] = [
       {
-        id: `team_${Date.now()}_1`,
+        id: `team_${Date.now()}_ga`,
         company_id: newCompany.id,
         team_code: 'TEAM_GA',
-        team_name: '총무팀',
+        team_name: '총무부서',
         status: 'ACTIVE',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
       {
-        id: `team_${Date.now()}_2`,
+        id: `team_${Date.now()}_biz`,
         company_id: newCompany.id,
-        team_code: 'TEAM_FIN',
-        team_name: '회계팀',
+        team_code: 'TEAM_BIZ',
+        team_name: '사업기획팀',
         status: 'ACTIVE',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -175,23 +232,52 @@ async function startServer() {
     ];
     db.teams.push(...defaultTeams);
 
-    // Automatically assign current user as ADMIN
+    // Initial Open Fiscal Period (2026-09)
+    db.fiscalPeriods.push({
+      id: `fp_${newCompany.id}_2026_09`,
+      company_id: newCompany.id,
+      year: 2026,
+      month: 9,
+      status: 'OPEN',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Default User-Company Role: creator gets ORG_ADMIN
     db.userCompanyRoles.push({
       id: `ucr_${Date.now()}`,
       user_id: req.user!.id,
       company_id: newCompany.id,
-      role_id: 'ADMIN',
+      role_id: 'ORG_ADMIN',
       status: 'ACTIVE',
       created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     });
 
-    // Default activate base accounts (Method B)
+    // Default Company Accounts (Method B)
     db.accounts.forEach((acc) => {
       db.companyAccounts.push({
+        id: `ca_${newCompany.id}_${acc.id}`,
         company_id: newCompany.id,
         account_id: acc.id,
-        is_active: ['101', '103', '251', '253', '331', '411', '501', '504', '508'].includes(acc.account_code),
+        is_active: ['101', '103', '251', '253', '331', '4100', '4200', '5100', '5210', '5250'].includes(
+          acc.account_code
+        ),
+        created_at: new Date().toISOString(),
       });
+    });
+
+    // Audit Log
+    db.addAuditLog({
+      company_id: newCompany.id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'CREATE',
+      entity_type: 'COMPANY',
+      entity_id: newCompany.id,
+      after_data: newCompany,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
     });
 
     res.status(201).json({ company: newCompany });
@@ -216,7 +302,56 @@ async function startServer() {
     next();
   };
 
-  // Get Teams for Current Company
+  // 10. 회계기간 fiscal_periods API (마감 관리)
+  app.get('/api/v1/fiscal-periods', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const companyId = req.companyId!;
+    const periods = db.fiscalPeriods
+      .filter((fp) => fp.company_id === companyId)
+      .sort((a, b) => b.year - a.year || b.month - a.month);
+    res.json({ fiscal_periods: periods });
+  });
+
+  app.post('/api/v1/fiscal-periods/:id/toggle-close', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    // Only ORG_ADMIN, SUPER_ADMIN or HQ_ACCOUNTANT can toggle closing
+    const roleId = req.userRole?.role_id;
+    if (!req.isSuperAdmin && roleId !== 'ORG_ADMIN' && roleId !== 'HQ_ACCOUNTANT' && roleId !== 'ADMIN') {
+      return res.status(403).json({ error: '회계기간 마감 권한이 없습니다.' });
+    }
+
+    const fp = db.fiscalPeriods.find((p) => p.id === req.params.id && p.company_id === req.companyId);
+    if (!fp) {
+      return res.status(404).json({ error: '회계기간을 찾을 수 없습니다.' });
+    }
+
+    const beforeStatus = fp.status;
+    if (fp.status === 'OPEN') {
+      fp.status = 'CLOSED';
+      fp.closed_at = new Date().toISOString();
+      fp.closed_by = req.user!.name;
+    } else {
+      fp.status = 'OPEN';
+      fp.closed_at = undefined;
+      fp.closed_by = undefined;
+    }
+    fp.updated_at = new Date().toISOString();
+
+    db.addAuditLog({
+      company_id: req.companyId!,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'CLOSE_PERIOD',
+      entity_type: 'FISCAL_PERIOD',
+      entity_id: fp.id,
+      before_data: { status: beforeStatus },
+      after_data: { status: fp.status, closed_by: fp.closed_by },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, fiscal_period: fp });
+  });
+
+  // Teams for Current Company
   app.get('/api/v1/teams', requireCompanyAccess, (req: TenantRequest, res: Response) => {
     const teams = db.teams.filter((t) => t.company_id === req.companyId);
     res.json({ teams });
@@ -263,7 +398,13 @@ async function startServer() {
     const accountId = req.params.accountId;
     let entry = db.companyAccounts.find((ca) => ca.company_id === companyId && ca.account_id === accountId);
     if (!entry) {
-      entry = { company_id: companyId, account_id: accountId, is_active: false };
+      entry = {
+        id: `ca_${companyId}_${accountId}`,
+        company_id: companyId,
+        account_id: accountId,
+        is_active: false,
+        created_at: new Date().toISOString(),
+      };
       db.companyAccounts.push(entry);
     } else {
       entry.is_active = !entry.is_active;
@@ -278,7 +419,7 @@ async function startServer() {
   });
 
   app.post('/api/v1/bank-accounts', requireCompanyAccess, (req: TenantRequest, res: Response) => {
-    const { bank_name, account_number, account_name, initial_balance, notes } = req.body;
+    const { bank_name, account_number, account_name, initial_balance, notes, account_type } = req.body;
     if (!bank_name || !account_number) {
       return res.status(400).json({ error: '은행명과 계좌번호는 필수입니다.' });
     }
@@ -288,9 +429,13 @@ async function startServer() {
       bank_name,
       account_number,
       account_name: account_name || `${bank_name} 보통예금`,
+      account_type: account_type || 'CHECKING',
       current_balance: Number(initial_balance) || 0,
+      is_main: false,
       is_active: true,
       notes,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     db.bankAccounts.push(newBank);
     res.status(201).json({ bank_account: newBank });
@@ -303,7 +448,8 @@ async function startServer() {
   });
 
   app.post('/api/v1/vendors', requireCompanyAccess, (req: TenantRequest, res: Response) => {
-    const { vendor_name, business_number, representative, phone, category } = req.body;
+    const { vendor_name, business_number, representative_name, representative, phone, email, address, category } =
+      req.body;
     if (!vendor_name) {
       return res.status(400).json({ error: '거래처명을 입력해주세요.' });
     }
@@ -313,15 +459,21 @@ async function startServer() {
       vendor_code: `V-${Date.now().toString().slice(-4)}`,
       vendor_name,
       business_number: business_number || '000-00-00000',
-      representative: representative || '',
+      representative_name: representative_name || representative || '',
       phone: phone || '',
+      email: email || '',
+      address: address || '',
+      vendor_type: 'SUPPLIER',
+      is_active: true,
       category: category || '일반거래처',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     db.vendors.push(newVendor);
     res.status(201).json({ vendor: newVendor });
   });
 
-  // Budgets for Current Company
+  // Budgets for Current Company (실시간 지출액 차감 계산)
   app.get('/api/v1/budgets', requireCompanyAccess, (req: TenantRequest, res: Response) => {
     const year = Number(req.query.year) || 2026;
     const companyBudgets = db.budgets.filter((b) => b.company_id === req.companyId && b.fiscal_year === year);
@@ -334,7 +486,8 @@ async function startServer() {
             t.company_id === req.companyId &&
             t.team_id === b.team_id &&
             t.account_id === b.account_id &&
-            t.transaction_type === 'EXPENSE'
+            t.transaction_type === 'EXPENSE' &&
+            t.status !== 'CANCELLED'
         )
         .reduce((sum, t) => sum + t.total_amount, 0);
 
@@ -346,22 +499,54 @@ async function startServer() {
         team_name: team?.team_name || '미지정',
         account_name: account?.account_name || '미지정',
         spent_amount: spent,
-        remaining_amount: b.allocated_amount - spent,
-        execution_rate: b.allocated_amount > 0 ? Math.round((spent / b.allocated_amount) * 100) : 0,
+        executed_amount: spent,
+        remaining_amount: b.budget_amount - spent,
+        execution_rate: b.budget_amount > 0 ? Math.round((spent / b.budget_amount) * 100) : 0,
       };
     });
 
     res.json({ budgets: enriched });
   });
 
-  // Transactions Strictly Isolated by company_id
+  app.post('/api/v1/budgets', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const { team_id, account_id, budget_amount, description, fiscal_year = 2026 } = req.body;
+    if (!team_id || !account_id || budget_amount === undefined) {
+      return res.status(400).json({ error: '팀, 계정과목, 예산 금액을 입력해주세요.' });
+    }
+
+    const newBudget: Budget = {
+      id: `b_${Date.now()}`,
+      company_id: req.companyId!,
+      team_id,
+      account_id,
+      fiscal_year: Number(fiscal_year),
+      budget_amount: Number(budget_amount),
+      description,
+      created_by: req.user!.name,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    db.budgets.push(newBudget);
+    res.status(201).json({ budget: newBudget });
+  });
+
+  // 14. Transactions Strictly Isolated by company_id
   app.get('/api/v1/transactions', requireCompanyAccess, (req: TenantRequest, res: Response) => {
     const companyId = req.companyId!;
     let list = db.transactions.filter((t) => t.company_id === companyId);
 
+    // Attach attachments
+    list = list.map((t) => ({
+      ...t,
+      attachments: db.transactionAttachments.filter((att) => att.transaction_id === t.id),
+    }));
+
     // Team constraint if TEAM_ACCOUNTANT
-    if (req.userRole?.role_id === 'TEAM_ACCOUNTANT' && req.userRole.team_id) {
-      list = list.filter((t) => t.team_id === req.userRole!.team_id);
+    if (req.userRole?.role_id === 'TEAM_ACCOUNTANT') {
+      const userTeam = db.userTeamRoles.find((utr) => utr.user_id === req.user?.id);
+      if (userTeam) {
+        list = list.filter((t) => t.team_id === userTeam.team_id);
+      }
     }
 
     // Filters
@@ -387,10 +572,10 @@ async function startServer() {
 
     // Summary calculation
     const total_income = list
-      .filter((t) => t.transaction_type === 'INCOME')
+      .filter((t) => t.transaction_type === 'INCOME' && t.status !== 'CANCELLED')
       .reduce((sum, t) => sum + t.total_amount, 0);
     const total_expense = list
-      .filter((t) => t.transaction_type === 'EXPENSE')
+      .filter((t) => t.transaction_type === 'EXPENSE' && t.status !== 'CANCELLED')
       .reduce((sum, t) => sum + t.total_amount, 0);
     const net_balance = total_income - total_expense;
 
@@ -406,9 +591,8 @@ async function startServer() {
     });
   });
 
-  // Create Transaction (Guaranteed company_id tagging)
+  // Create Transaction (Mandatory Server Validation: supply_amount + vat_amount = total_amount, CLOSED fiscal_period check)
   app.post('/api/v1/transactions', requireCompanyAccess, (req: TenantRequest, res: Response) => {
-    // Check permission: VIEWER cannot create
     if (req.userRole?.role_id === 'VIEWER') {
       return res.status(403).json({ error: '조회자(VIEWER) 권한은 거래 전표를 등록할 수 없습니다.' });
     }
@@ -433,14 +617,52 @@ async function startServer() {
       return res.status(400).json({ error: '필수 항목(일자, 구분, 계정과목, 적요)을 입력해주세요.' });
     }
 
-    const sup = Number(supply_amount) || 0;
-    const vat = vat_type === 'TAXABLE' ? (vat_amount !== undefined ? Number(vat_amount) : Math.round(sup * 0.1)) : 0;
-    const tot = total_amount !== undefined ? Number(total_amount) : sup + vat;
+    // Check Fiscal Period status (CLOSED block)
+    const txDate = new Date(transaction_date);
+    const year = txDate.getFullYear();
+    const month = txDate.getMonth() + 1;
+    const closedPeriod = db.fiscalPeriods.find(
+      (fp) => fp.company_id === req.companyId && fp.year === year && fp.month === month && fp.status === 'CLOSED'
+    );
+    if (closedPeriod) {
+      return res.status(400).json({
+        error: `${year}년 ${month}월은 회계기간이 마감(CLOSED)되어 신규 전표를 등록할 수 없습니다.`,
+      });
+    }
+
+    // Find or assign fiscal period ID
+    let activePeriod = db.fiscalPeriods.find(
+      (fp) => fp.company_id === req.companyId && fp.year === year && fp.month === month
+    );
+    if (!activePeriod) {
+      activePeriod = {
+        id: `fp_${req.companyId}_${year}_${String(month).padStart(2, '0')}`,
+        company_id: req.companyId!,
+        year,
+        month,
+        status: 'OPEN',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      db.fiscalPeriods.push(activePeriod);
+    }
+
+    // Strict validation: supply_amount + vat_amount === total_amount
+    const sup = Math.round(Number(supply_amount) || 0);
+    const vat = vat_type === 'TAXABLE' ? (vat_amount !== undefined ? Math.round(Number(vat_amount)) : Math.round(sup * 0.1)) : 0;
+    const tot = total_amount !== undefined ? Math.round(Number(total_amount)) : sup + vat;
+
+    if (sup + vat !== tot) {
+      return res.status(400).json({
+        error: `금액 검증 실패: 공급가액(${sup.toLocaleString()}원) + 부가세(${vat.toLocaleString()}원) = ${(sup + vat).toLocaleString()}원이어야 하나, 총금액이 ${tot.toLocaleString()}원으로 입력되었습니다.`,
+      });
+    }
 
     const newTx: Transaction = {
       id: `tx_${req.companyId?.replace('comp_', '')}_${Date.now().toString().slice(-6)}`,
       company_id: req.companyId!, // ★ CORE MULTI-TENANT KEY
       team_id: team_id || (db.teams.find((t) => t.company_id === req.companyId)?.id || ''),
+      fiscal_period_id: activePeriod.id,
       transaction_date,
       transaction_type,
       account_id,
@@ -455,6 +677,8 @@ async function startServer() {
       memo,
       status: 'CONFIRMED',
       created_by: req.user!.name,
+      confirmed_by: req.user!.name,
+      confirmed_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -470,6 +694,19 @@ async function startServer() {
       }
     }
 
+    // Audit Log
+    db.addAuditLog({
+      company_id: req.companyId!,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'CREATE',
+      entity_type: 'TRANSACTION',
+      entity_id: newTx.id,
+      after_data: newTx,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
     res.status(201).json({ transaction: newTx });
   });
 
@@ -482,113 +719,388 @@ async function startServer() {
     if (idx === -1) {
       return res.status(404).json({ error: '전표를 찾을 수 없습니다.' });
     }
-    const [deleted] = db.transactions.splice(idx, 1);
+    const deleted = db.transactions[idx];
+
+    // Check fiscal period closed
+    if (deleted.fiscal_period_id) {
+      const fp = db.fiscalPeriods.find((p) => p.id === deleted.fiscal_period_id);
+      if (fp && fp.status === 'CLOSED') {
+        return res.status(400).json({ error: '마감된 회계기간의 전표는 삭제할 수 없습니다.' });
+      }
+    }
+
+    db.transactions.splice(idx, 1);
+
+    // Revert bank balance
+    if (deleted.bank_account_id) {
+      const bank = db.bankAccounts.find((b) => b.id === deleted.bank_account_id);
+      if (bank) {
+        if (deleted.transaction_type === 'INCOME') bank.current_balance -= deleted.total_amount;
+        else if (deleted.transaction_type === 'EXPENSE') bank.current_balance += deleted.total_amount;
+      }
+    }
+
+    // Audit Log
+    db.addAuditLog({
+      company_id: req.companyId!,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'DELETE',
+      entity_type: 'TRANSACTION',
+      entity_id: deleted.id,
+      before_data: deleted,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
     res.json({ success: true, deleted_id: deleted.id });
   });
 
-  // Reports API: Monthly Report (Isolated per company)
-  app.get('/api/v1/reports/monthly', requireCompanyAccess, (req: TenantRequest, res: Response) => {
-    const companyId = req.companyId!;
-    const year = Number(req.query.year) || 2026;
-    const month = Number(req.query.month) || 9;
-    const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-
-    const txs = db.transactions.filter(
-      (t) => t.company_id === companyId && t.transaction_date.startsWith(monthStr)
+  // 15. Attachments API (증빙 파일)
+  app.get('/api/v1/transactions/:id/attachments', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const atts = db.transactionAttachments.filter(
+      (a) => a.transaction_id === req.params.id && a.company_id === req.companyId
     );
-
-    const total_income = txs
-      .filter((t) => t.transaction_type === 'INCOME')
-      .reduce((sum, t) => sum + t.total_amount, 0);
-
-    const total_expense = txs
-      .filter((t) => t.transaction_type === 'EXPENSE')
-      .reduce((sum, t) => sum + t.total_amount, 0);
-
-    // Grouping by accounts
-    const accountMap = new Map(db.accounts.map((a) => [a.id, a]));
-    const categoryExpense: Record<string, number> = {};
-    const categoryIncome: Record<string, number> = {};
-
-    txs.forEach((t) => {
-      const acc = accountMap.get(t.account_id);
-      const cat = acc?.account_name || '기타';
-      if (t.transaction_type === 'EXPENSE') {
-        categoryExpense[cat] = (categoryExpense[cat] || 0) + t.total_amount;
-      } else if (t.transaction_type === 'INCOME') {
-        categoryIncome[cat] = (categoryIncome[cat] || 0) + t.total_amount;
-      }
-    });
-
-    const companyTeams = db.teams.filter((t) => t.company_id === companyId);
-    const team_summary = companyTeams.map((team) => {
-      const teamTxs = txs.filter((t) => t.team_id === team.id);
-      return {
-        team_id: team.id,
-        team_name: team.team_name,
-        income: teamTxs.filter((t) => t.transaction_type === 'INCOME').reduce((s, t) => s + t.total_amount, 0),
-        expense: teamTxs.filter((t) => t.transaction_type === 'EXPENSE').reduce((s, t) => s + t.total_amount, 0),
-      };
-    });
-
-    res.json({
-      company_id: companyId,
-      year,
-      month,
-      total_income,
-      total_expense,
-      net_profit: total_income - total_expense,
-      income_by_category: Object.entries(categoryIncome).map(([category, amount]) => ({ category, amount })),
-      expense_by_category: Object.entries(categoryExpense).map(([category, amount]) => ({ category, amount })),
-      team_summary,
-    });
+    res.json({ attachments: atts });
   });
 
-  // Bank Excel Import Simulator
-  app.post('/api/v1/bank-import', requireCompanyAccess, (req: TenantRequest, res: Response) => {
-    const { bank_account_id, rows } = req.body;
+  app.post('/api/v1/transactions/:id/attachments', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const { file_name, file_type, file_size, file_path } = req.body;
+    const tx = db.transactions.find((t) => t.id === req.params.id && t.company_id === req.companyId);
+    if (!tx) {
+      return res.status(404).json({ error: '전표를 찾을 수 없습니다.' });
+    }
+
+    const newAtt: TransactionAttachment = {
+      id: `att_${Date.now()}`,
+      company_id: req.companyId!,
+      transaction_id: tx.id,
+      file_name: file_name || '영수증_증빙.pdf',
+      file_path: file_path || `https://storage.supabase.co/v0/b/accounting/o/${req.companyId}/${file_name}`,
+      file_type: file_type || 'application/pdf',
+      file_size: file_size || 128000,
+      uploaded_by: req.user!.name,
+      created_at: new Date().toISOString(),
+    };
+    db.transactionAttachments.push(newAtt);
+    res.status(201).json({ attachment: newAtt });
+  });
+
+  // 18. 은행 Excel 가져오기 2단계 파이프라인
+  // 1단계: 업로드 및 임시 데이터 생성 + 중복 검사 (row_hash & external_transaction_id)
+  app.post('/api/v1/bank-imports/upload', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const { bank_account_id, file_name, rows } = req.body;
     if (!bank_account_id) {
       return res.status(400).json({ error: '가져올 은행 계좌를 선택해주세요.' });
     }
 
-    const importedTxs: Transaction[] = [];
-    const defaultTeam = db.teams.find((t) => t.company_id === req.companyId);
-    const defaultAccount = db.accounts.find((a) => a.account_code === '508') || db.accounts[0];
+    const bank = db.bankAccounts.find((b) => b.id === bank_account_id && b.company_id === req.companyId);
+    if (!bank) {
+      return res.status(404).json({ error: '은행 계좌를 찾을 수 없습니다.' });
+    }
 
-    const inputRows = Array.isArray(rows) && rows.length > 0 ? rows : [
-      { date: '2026-09-21', desc: '하나로마트 소모품 결제', inAmt: 0, outAmt: 84000 },
-      { date: '2026-09-21', desc: '익명 CMS 후원금 입금', inAmt: 150000, outAmt: 0 },
-      { date: '2026-09-20', desc: '카카오페이 식대 지출', inAmt: 0, outAmt: 32000 },
+    const importId = `bi_${Date.now()}`;
+    const rawRows = Array.isArray(rows) && rows.length > 0 ? rows : [
+      { date: '2026-09-22', desc: '하나로마트 사무용품 구매', inAmt: 0, outAmt: 45000, counterparty: '하나로마트' },
+      { date: '2026-09-22', desc: '개인 지정후원금 입금', inAmt: 200000, outAmt: 0, counterparty: '박서현' },
+      { date: '2026-09-20', desc: '카카오페이 식대 지출', inAmt: 0, outAmt: 32000, counterparty: '카카오페이' },
     ];
 
-    inputRows.forEach((r: any, idx: number) => {
+    let successRows = 0;
+    let duplicateRows = 0;
+    const parsedRows: BankImportRow[] = [];
+
+    rawRows.forEach((r: any, idx: number) => {
       const isIncome = Number(r.inAmt) > 0;
       const amount = isIncome ? Number(r.inAmt) : Number(r.outAmt);
+      const date = r.date || new Date().toISOString().split('T')[0];
+      const desc = r.desc || '';
+      const counterparty = r.counterparty || '';
+      const externalId = r.external_id || `BANK_${date.replace(/-/g, '')}_${idx + 1}`;
+
+      // Calculate row hash for duplicate prevention: date + amount + type + desc + bank_account_id
+      const hashInput = `${date}_${isIncome ? 'INCOME' : 'EXPENSE'}_${amount}_${desc}_${bank_account_id}`;
+      const rowHash = crypto.createHash('md5').update(hashInput).digest('hex');
+
+      // Check duplicate against existing transactions or existing bank_import_rows
+      const isDupInTxs = db.transactions.some(
+        (t) =>
+          t.company_id === req.companyId &&
+          t.bank_account_id === bank_account_id &&
+          t.transaction_date === date &&
+          t.total_amount === amount &&
+          t.description === desc
+      );
+
+      const isDupInImport = db.bankImportRows.some(
+        (bir) => bir.company_id === req.companyId && (bir.row_hash === rowHash || (bir.external_transaction_id && bir.external_transaction_id === externalId))
+      );
+
+      const isDuplicate = isDupInTxs || isDupInImport;
+      if (isDuplicate) duplicateRows++;
+      else successRows++;
+
+      const importRow: BankImportRow = {
+        id: `bir_${Date.now()}_${idx}`,
+        bank_import_id: importId,
+        company_id: req.companyId!,
+        transaction_date: date,
+        transaction_type: isIncome ? 'INCOME' : 'EXPENSE',
+        amount,
+        balance: bank.current_balance,
+        description: desc,
+        counterparty,
+        external_transaction_id: externalId,
+        row_hash: rowHash,
+        status: isDuplicate ? 'DUPLICATE' : 'PENDING',
+        error_message: isDuplicate ? '이미 장부에 등록되었거나 중복된 거래내역입니다.' : undefined,
+        created_at: new Date().toISOString(),
+      };
+
+      db.bankImportRows.push(importRow);
+      parsedRows.push(importRow);
+    });
+
+    const bankImportSession: BankImport = {
+      id: importId,
+      company_id: req.companyId!,
+      bank_account_id,
+      file_name: file_name || '거래내역_업로드.xlsx',
+      import_date: new Date().toISOString(),
+      total_rows: rawRows.length,
+      success_rows: successRows,
+      duplicate_rows: duplicateRows,
+      error_rows: 0,
+      status: 'PENDING',
+      created_by: req.user!.name,
+      created_at: new Date().toISOString(),
+    };
+
+    db.bankImports.push(bankImportSession);
+
+    res.json({
+      success: true,
+      bank_import: bankImportSession,
+      rows: parsedRows,
+    });
+  });
+
+  // 2단계: 사용자 확인 후 PENDING 행을 정식 transactions 전표로 일괄 변환
+  app.post('/api/v1/bank-imports/:importId/confirm', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const importSession = db.bankImports.find((bi) => bi.id === req.params.importId && bi.company_id === req.companyId);
+    if (!importSession) {
+      return res.status(404).json({ error: '은행 가져오기 세션을 찾을 수 없습니다.' });
+    }
+
+    const pendingRows = db.bankImportRows.filter(
+      (r) => r.bank_import_id === importSession.id && r.status === 'PENDING'
+    );
+
+    if (pendingRows.length === 0) {
+      return res.status(400).json({ error: '등록할 대기 거래 건이 없습니다.' });
+    }
+
+    const defaultTeam = db.teams.find((t) => t.company_id === req.companyId);
+    const defaultExpenseAcc = db.accounts.find((a) => a.account_code === '5250') || db.accounts.find((a) => a.account_type === 'EXPENSE')!;
+    const defaultIncomeAcc = db.accounts.find((a) => a.account_code === '4200') || db.accounts.find((a) => a.account_type === 'REVENUE')!;
+    const bank = db.bankAccounts.find((b) => b.id === importSession.bank_account_id);
+
+    const generatedTxs: Transaction[] = [];
+
+    pendingRows.forEach((row) => {
+      const isIncome = row.transaction_type === 'INCOME';
+      const sup = isIncome ? row.amount : Math.round(row.amount / 1.1);
+      const vat = isIncome ? 0 : row.amount - sup;
+
       const tx: Transaction = {
-        id: `tx_imp_${Date.now()}_${idx}`,
+        id: `tx_imp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         company_id: req.companyId!,
         team_id: defaultTeam?.id || '',
-        transaction_date: r.date || '2026-09-21',
-        transaction_type: isIncome ? 'INCOME' : 'EXPENSE',
-        account_id: isIncome ? 'acc_402' : defaultAccount.id,
+        transaction_date: row.transaction_date,
+        transaction_type: row.transaction_type,
+        account_id: isIncome ? defaultIncomeAcc.id : defaultExpenseAcc.id,
         payment_method: 'BANK_TRANSFER',
-        bank_account_id,
+        bank_account_id: importSession.bank_account_id,
         vat_type: isIncome ? 'TAX_EXEMPT' : 'TAXABLE',
-        supply_amount: isIncome ? amount : Math.round(amount / 1.1),
-        vat_amount: isIncome ? 0 : amount - Math.round(amount / 1.1),
-        total_amount: amount,
-        description: r.desc || '은행 엑셀 가져오기 거래',
-        memo: '은행 거래내역 자동 연동분',
+        supply_amount: sup,
+        vat_amount: vat,
+        total_amount: row.amount,
+        description: row.description,
+        memo: `[은행 Excel 가져오기] 상대: ${row.counterparty || '미기재'}, 고유키: ${row.external_transaction_id}`,
         status: 'CONFIRMED',
         created_by: req.user!.name,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
+
       db.transactions.push(tx);
-      importedTxs.push(tx);
+      generatedTxs.push(tx);
+
+      // Link transaction to row & mark CONFIRMED
+      row.status = 'CONFIRMED';
+      row.transaction_id = tx.id;
+
+      // Update bank account balance
+      if (bank) {
+        if (isIncome) bank.current_balance += row.amount;
+        else bank.current_balance -= row.amount;
+      }
     });
 
-    res.json({ success: true, count: importedTxs.length, transactions: importedTxs });
+    importSession.status = 'PROCESSED';
+
+    // Audit Log
+    db.addAuditLog({
+      company_id: req.companyId!,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'IMPORT',
+      entity_type: 'TRANSACTION',
+      entity_id: importSession.id,
+      after_data: { imported_count: generatedTxs.length, bank_account_id: importSession.bank_account_id },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({
+      success: true,
+      message: `${generatedTxs.length}건의 은행 거래가 전표로 일괄 등록되었습니다.`,
+      transactions: generatedTxs,
+    });
+  });
+
+  // 20. 감사 로그 audit_logs 조회
+  app.get('/api/v1/audit-logs', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const logs = db.auditLogs.filter((l) => l.company_id === req.companyId).slice(0, 100);
+    res.json({ audit_logs: logs });
+  });
+
+  // 24. 동적 보고서 API (비저장 모델: transactions로부터 실시간 계산)
+  app.get('/api/v1/reports/summary', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const companyId = req.companyId!;
+    const year = Number(req.query.year) || 2026;
+    const month = req.query.month ? Number(req.query.month) : undefined;
+    const quarter = req.query.quarter ? Number(req.query.quarter) : undefined;
+
+    let txs = db.transactions.filter((t) => t.company_id === companyId && t.status !== 'CANCELLED');
+
+    if (month) {
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      txs = txs.filter((t) => t.transaction_date.startsWith(monthStr));
+    } else if (quarter) {
+      const qMonths =
+        quarter === 1 ? ['01', '02', '03'] : quarter === 2 ? ['04', '05', '06'] : quarter === 3 ? ['07', '08', '09'] : ['10', '11', '12'];
+      txs = txs.filter((t) => {
+        const ym = t.transaction_date.slice(0, 7);
+        return qMonths.some((m) => ym === `${year}-${m}`);
+      });
+    } else {
+      txs = txs.filter((t) => t.transaction_date.startsWith(String(year)));
+    }
+
+    const total_income = txs
+      .filter((t) => t.transaction_type === 'INCOME')
+      .reduce((sum, t) => sum + t.total_amount, 0);
+    const total_expense = txs
+      .filter((t) => t.transaction_type === 'EXPENSE')
+      .reduce((sum, t) => sum + t.total_amount, 0);
+
+    const taxable_amount = txs
+      .filter((t) => t.vat_type === 'TAXABLE')
+      .reduce((sum, t) => sum + t.supply_amount, 0);
+    const tax_free_amount = txs
+      .filter((t) => t.vat_type === 'TAX_EXEMPT')
+      .reduce((sum, t) => sum + t.supply_amount, 0);
+
+    // Group by Account
+    const accMap = new Map(db.accounts.map((a) => [a.id, a]));
+    const incomeAccs: Record<string, { account_id: string; account_name: string; category: string; amount: number }> = {};
+    const expenseAccs: Record<string, { account_id: string; account_name: string; category: string; amount: number }> = {};
+
+    txs.forEach((t) => {
+      const acc = accMap.get(t.account_id);
+      const accName = acc?.account_name || '미분류';
+      const cat = acc?.category || '일반';
+
+      if (t.transaction_type === 'INCOME') {
+        if (!incomeAccs[t.account_id]) incomeAccs[t.account_id] = { account_id: t.account_id, account_name: accName, category: cat, amount: 0 };
+        incomeAccs[t.account_id].amount += t.total_amount;
+      } else if (t.transaction_type === 'EXPENSE') {
+        if (!expenseAccs[t.account_id]) expenseAccs[t.account_id] = { account_id: t.account_id, account_name: accName, category: cat, amount: 0 };
+        expenseAccs[t.account_id].amount += t.total_amount;
+      }
+    });
+
+    // Team Summary
+    const teams = db.teams.filter((t) => t.company_id === companyId);
+    const team_summary = teams.map((team) => {
+      const tTxs = txs.filter((t) => t.team_id === team.id);
+      const inc = tTxs.filter((t) => t.transaction_type === 'INCOME').reduce((s, t) => s + t.total_amount, 0);
+      const exp = tTxs.filter((t) => t.transaction_type === 'EXPENSE').reduce((s, t) => s + t.total_amount, 0);
+      return {
+        team_id: team.id,
+        team_name: team.team_name,
+        income: inc,
+        expense: exp,
+        net: inc - exp,
+      };
+    });
+
+    res.json({
+      period_type: month ? 'MONTHLY' : quarter ? 'QUARTERLY' : 'ANNUAL',
+      year,
+      month,
+      quarter,
+      total_income,
+      total_expense,
+      net_income: total_income - total_expense,
+      taxable_amount,
+      tax_free_amount,
+      income_by_category: Object.values(incomeAccs),
+      expense_by_category: Object.values(expenseAccs),
+      team_summary,
+    });
+  });
+
+  // 총계정원장 (General Ledger) 실시간 산출
+  app.get('/api/v1/reports/ledger', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const companyId = req.companyId!;
+    const { account_id, year = '2026' } = req.query;
+
+    let txs = db.transactions.filter(
+      (t) => t.company_id === companyId && t.transaction_date.startsWith(year as string) && t.status !== 'CANCELLED'
+    );
+    if (account_id) {
+      txs = txs.filter((t) => t.account_id === account_id);
+    }
+    txs.sort((a, b) => a.transaction_date.localeCompare(b.transaction_date));
+
+    res.json({
+      year,
+      account_id,
+      entries: txs.map((t) => {
+        const acc = db.accounts.find((a) => a.id === t.account_id);
+        const team = db.teams.find((tm) => tm.id === t.team_id);
+        return {
+          id: t.id,
+          date: t.transaction_date,
+          account_name: acc?.account_name,
+          team_name: team?.team_name,
+          description: t.description,
+          debit: t.transaction_type === 'EXPENSE' ? t.total_amount : 0,
+          credit: t.transaction_type === 'INCOME' ? t.total_amount : 0,
+        };
+      }),
+    });
+  });
+
+  // Roles & Permissions Reference API
+  app.get('/api/v1/roles', (req, res) => {
+    res.json({
+      roles: db.roles,
+      permissions: db.permissions,
+      role_permissions: db.rolePermissions,
+    });
   });
 
   // Admin: User-Company Roles Management
@@ -597,6 +1109,7 @@ async function startServer() {
       users: db.users,
       roles: db.userCompanyRoles,
       companies: db.companies,
+      all_roles: db.roles,
     });
   });
 
@@ -611,7 +1124,21 @@ async function startServer() {
     );
 
     if (existingIdx !== -1) {
+      const beforeRole = db.userCompanyRoles[existingIdx].role_id;
       db.userCompanyRoles[existingIdx].role_id = role_id;
+      db.userCompanyRoles[existingIdx].updated_at = new Date().toISOString();
+
+      db.addAuditLog({
+        company_id,
+        user_id: req.user!.id,
+        user_name: req.user!.name,
+        action: 'UPDATE',
+        entity_type: 'USER_ROLE',
+        entity_id: user_id,
+        before_data: { role_id: beforeRole },
+        after_data: { role_id },
+      });
+
       return res.json({ role: db.userCompanyRoles[existingIdx] });
     }
 
@@ -622,8 +1149,20 @@ async function startServer() {
       role_id,
       status: 'ACTIVE',
       created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     db.userCompanyRoles.push(newRole);
+
+    db.addAuditLog({
+      company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'CREATE',
+      entity_type: 'USER_ROLE',
+      entity_id: user_id,
+      after_data: newRole,
+    });
+
     res.status(201).json({ role: newRole });
   });
 
@@ -643,7 +1182,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`don don Accounting Server running on http://0.0.0.0:${PORT}`);
+    console.log(`don don Accounting Server (18 Tables Multi-Tenant) running on http://0.0.0.0:${PORT}`);
   });
 }
 

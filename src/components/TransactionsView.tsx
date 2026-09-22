@@ -41,6 +41,8 @@ interface TransactionsViewProps {
   bankAccounts: BankAccount[];
   vendors: Vendor[];
   userRole: string;
+  canCreate?: boolean;
+  canDelete?: boolean;
   onAddTransaction: (payload: Partial<Transaction>) => Promise<void>;
   onDeleteTransaction: (id: string) => Promise<void>;
   onOpenBankImport: () => void;
@@ -54,6 +56,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   bankAccounts,
   vendors,
   userRole,
+  canCreate = true,
+  canDelete = true,
   onAddTransaction,
   onDeleteTransaction,
   onOpenBankImport,
@@ -214,7 +218,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         `"${(t.memo || '').replace(/"/g, '""')}"`,
       ].join(',')
     );
-    const blob = new Blob(['\uFEFF' + headers + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['﻿' + headers + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
@@ -224,7 +228,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     document.body.removeChild(link);
   };
 
-  const isViewer = userRole === 'VIEWER';
+  const isViewer = !canCreate;
 
   return (
     <div className="space-y-5">
@@ -448,7 +452,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                         )}
                       </td>
                       <td className="py-3 px-2 text-center">
-                        {!isViewer ? (
+                        {canDelete ? (
                           <button
                             onClick={() => {
                               if (confirm('이 전표를 삭제하시겠습니까?')) {

@@ -13,15 +13,10 @@ import {
   Transaction,
   User,
   UserCompanyRole,
-  FiscalPeriod,
-  TransactionAttachment,
-  BankImport,
-  BankImportRow,
-  AuditLog,
-  DynamicReportSummary,
-  Role,
-  Permission,
-  RolePermission,
+  UserTeamRole,
+  PermissionCode,
+  RoleType,
+  MonthlyReportSummary,
 } from '../types';
 
 class ApiClient {
@@ -62,9 +57,28 @@ class ApiClient {
     };
   }
 
-  async getMe(): Promise<{ user: User; roles: UserCompanyRole[]; companies: (Company & { my_role: string })[] }> {
+  async getMe(): Promise<{
+    user: User;
+    roles: UserCompanyRole[];
+    team_roles: UserTeamRole[];
+    companies: (Company & { my_role: string })[];
+  }> {
     const res = await fetch('/api/v1/auth/me', { headers: this.getHeaders() });
     if (!res.ok) throw new Error('사용자 정보를 가져올 수 없습니다.');
+    return res.json();
+  }
+
+  async getPermissions(): Promise<{
+    company_id: string;
+    permissions: PermissionCode[];
+    team_scope: 'ALL' | string[];
+    team_roles: UserTeamRole[];
+  }> {
+    const res = await fetch('/api/v1/auth/permissions', { headers: this.getHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '권한 정보를 가져올 수 없습니다.');
+    }
     return res.json();
   }
 
@@ -87,26 +101,6 @@ class ApiClient {
     }
     const data = await res.json();
     return data.company;
-  }
-
-  async getFiscalPeriods(): Promise<FiscalPeriod[]> {
-    const res = await fetch('/api/v1/fiscal-periods', { headers: this.getHeaders() });
-    if (!res.ok) throw new Error('회계기간 목록 조회 실패');
-    const data = await res.json();
-    return data.fiscal_periods;
-  }
-
-  async toggleFiscalPeriod(id: string): Promise<FiscalPeriod> {
-    const res = await fetch(`/api/v1/fiscal-periods/${id}/toggle-close`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || '회계마감 변경 실패');
-    }
-    const data = await res.json();
-    return data.fiscal_period;
   }
 
   async getTeams(): Promise<Team[]> {
@@ -187,22 +181,8 @@ class ApiClient {
     return data.budgets;
   }
 
-  async createBudget(payload: Partial<Budget>): Promise<Budget> {
-    const res = await fetch('/api/v1/budgets', {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || '예산 등록 실패');
-    }
-    const data = await res.json();
-    return data.budget;
-  }
-
   async getTransactions(params?: Record<string, string>): Promise<{
-    transactions: (Transaction & { attachments?: TransactionAttachment[] })[];
+    transactions: Transaction[];
     summary: { total_income: number; total_expense: number; net_balance: number };
     total_count: number;
   }> {
@@ -235,112 +215,37 @@ class ApiClient {
       headers: this.getHeaders(),
     });
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       throw new Error(err.error || '전표 삭제 실패');
     }
   }
 
-  async getAttachments(transactionId: string): Promise<TransactionAttachment[]> {
-    const res = await fetch(`/api/v1/transactions/${transactionId}/attachments`, {
+  async getMonthlyReport(year = 2026, month = 9): Promise<MonthlyReportSummary> {
+    const res = await fetch(`/api/v1/reports/monthly?year=${year}&month=${month}`, {
       headers: this.getHeaders(),
     });
-    if (!res.ok) throw new Error('증빙 목록 조회 실패');
-    const data = await res.json();
-    return data.attachments;
+    if (!res.ok) throw new Error('월간 보고서 조회 실패');
+    return res.json();
   }
 
-  async uploadAttachment(transactionId: string, payload: Partial<TransactionAttachment>): Promise<TransactionAttachment> {
-    const res = await fetch(`/api/v1/transactions/${transactionId}/attachments`, {
+  async importBankExcel(bank_account_id: string, rows?: any[]): Promise<{ count: number; transactions: Transaction[] }> {
+    const res = await fetch('/api/v1/bank-import', {
       method: 'POST',
       headers: this.getHeaders(),
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error('증빙 업로드 실패');
-    const data = await res.json();
-    return data.attachment;
-  }
-
-  // 2단계 은행 엑셀 가져오기
-  async uploadBankImport(payload: {
-    bank_account_id: string;
-    file_name?: string;
-    rows?: any[];
-  }): Promise<{ bank_import: BankImport; rows: BankImportRow[] }> {
-    const res = await fetch('/api/v1/bank-imports/upload', {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ bank_account_id, rows }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || '은행 데이터 분석 실패');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '은행 거래내역 가져오기 실패');
     }
-    return res.json();
-  }
-
-  async confirmBankImport(importId: string): Promise<{ success: boolean; message: string; transactions: Transaction[] }> {
-    const res = await fetch(`/api/v1/bank-imports/${importId}/confirm`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || '전표 일괄 확정 실패');
-    }
-    return res.json();
-  }
-
-  // 기존 호환용 편의 메서드
-  async importBankExcel(bankAccountId: string, rows?: any[]): Promise<{ transactions: Transaction[] }> {
-    const uploadRes = await this.uploadBankImport({
-      bank_account_id: bankAccountId,
-      file_name: '신한은행_거래내역_202609.xlsx',
-      rows,
-    });
-    const confirmRes = await this.confirmBankImport(uploadRes.bank_import.id);
-    return { transactions: confirmRes.transactions };
-  }
-
-  // 동적 보고서 API
-  async getDynamicReport(params: { year: number; month?: number; quarter?: number }): Promise<DynamicReportSummary> {
-    const q = new URLSearchParams({
-      year: String(params.year),
-      ...(params.month ? { month: String(params.month) } : {}),
-      ...(params.quarter ? { quarter: String(params.quarter) } : {}),
-    }).toString();
-
-    const res = await fetch(`/api/v1/reports/summary?${q}`, {
-      headers: this.getHeaders(),
-    });
-    if (!res.ok) throw new Error('보고서 생성 실패');
-    return res.json();
-  }
-
-  async getGeneralLedger(params: { account_id?: string; year?: string }): Promise<{ entries: any[] }> {
-    const q = new URLSearchParams(params as any).toString();
-    const res = await fetch(`/api/v1/reports/ledger?${q}`, { headers: this.getHeaders() });
-    if (!res.ok) throw new Error('총계정원장 조회 실패');
-    return res.json();
-  }
-
-  async getAuditLogs(): Promise<AuditLog[]> {
-    const res = await fetch('/api/v1/audit-logs', { headers: this.getHeaders() });
-    if (!res.ok) throw new Error('감사 로그 조회 실패');
-    const data = await res.json();
-    return data.audit_logs;
-  }
-
-  async getRoles(): Promise<{ roles: Role[]; permissions: Permission[]; role_permissions: RolePermission[] }> {
-    const res = await fetch('/api/v1/roles', { headers: this.getHeaders() });
-    if (!res.ok) throw new Error('역할 및 권한 기준정보 조회 실패');
     return res.json();
   }
 
   async getAdminUsersAndRoles(): Promise<{
     users: User[];
     roles: UserCompanyRole[];
+    team_roles: UserTeamRole[];
     companies: Company[];
-    all_roles: Role[];
   }> {
     const res = await fetch('/api/v1/admin/users-and-roles', { headers: this.getHeaders() });
     if (!res.ok) throw new Error('사용자 및 권한 정보 조회 실패');
@@ -353,7 +258,65 @@ class ApiClient {
       headers: this.getHeaders(),
       body: JSON.stringify({ user_id, company_id, role_id }),
     });
-    if (!res.ok) throw new Error('권한 설정 실패');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '권한 설정 실패');
+    }
+  }
+
+  async assignUserTeamRole(user_id: string, team_id: string, company_id: string, role_id: RoleType): Promise<UserTeamRole> {
+    const res = await fetch('/api/v1/admin/user-team-roles', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ user_id, team_id, company_id, role_id }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '팀 권한 배정 실패');
+    }
+    const data = await res.json();
+    return data.team_role;
+  }
+
+  async removeUserTeamRole(id: string): Promise<void> {
+    const res = await fetch(`/api/v1/admin/user-team-roles/${id}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '팀 권한 삭제 실패');
+    }
+  }
+
+  async updateUserStatus(userId: string, status: 'ACTIVE' | 'SUSPENDED' | 'PENDING'): Promise<User> {
+    const res = await fetch(`/api/v1/admin/users/${userId}/status`, {
+      method: 'PUT',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '사용자 상태 변경 실패');
+    }
+    const data = await res.json();
+    return data.user;
+  }
+
+  async updateCustomPermissions(
+    userCompanyRoleId: string,
+    grant: PermissionCode[],
+    revoke: PermissionCode[]
+  ): Promise<void> {
+    const res = await fetch(`/api/v1/admin/user-company-roles/${userCompanyRoleId}/custom-permissions`, {
+      method: 'PUT',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ grant, revoke }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '개별 권한 저장 실패');
+    }
   }
 }
 
