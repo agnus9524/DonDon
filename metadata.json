@@ -1,0 +1,6 @@
+{
+  "name": "don don - 멀티테넌트 통합 회계관리 시스템",
+  "description": "회사별 데이터 격리와 다중 법인 권한 관리를 지원하는 차세대 멀티테넌트 통합 회계관리 시스템 don don",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
