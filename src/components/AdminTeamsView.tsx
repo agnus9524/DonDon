@@ -5,13 +5,14 @@
 
 import React, { useState } from 'react';
 import { Company, Team } from '../types';
-import { FolderGit2, Plus, CheckCircle2, X } from 'lucide-react';
+import { FolderGit2, Plus, CheckCircle2, X, Trash2, AlertTriangle } from 'lucide-react';
 
 interface AdminTeamsViewProps {
   currentCompany: Company;
   teams: Team[];
   userRole: string;
   onAddTeam: (name: string, code?: string) => Promise<void>;
+  onDeleteTeam?: (teamId: string) => Promise<void>;
 }
 
 export const AdminTeamsView: React.FC<AdminTeamsViewProps> = ({
@@ -19,11 +20,15 @@ export const AdminTeamsView: React.FC<AdminTeamsViewProps> = ({
   teams,
   userRole,
   onAddTeam,
+  onDeleteTeam,
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [teamName, setTeamName] = useState('');
   const [teamCode, setTeamCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingTeam, setDeletingTeam] = useState<Team | null>(null);
+  const [deleteConfirmTeamName, setDeleteConfirmTeamName] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,6 +43,19 @@ export const AdminTeamsView: React.FC<AdminTeamsViewProps> = ({
       alert(err.message || '팀 추가 실패');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deletingTeam || !onDeleteTeam) return;
+    try {
+      setIsDeleting(true);
+      await onDeleteTeam(deletingTeam.id);
+      setDeletingTeam(null);
+    } catch (err: any) {
+      alert(err.message || '팀 삭제 실패');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -85,9 +103,20 @@ export const AdminTeamsView: React.FC<AdminTeamsViewProps> = ({
                   <span className="font-mono text-xs text-slate-400">{t.team_code}</span>
                 </div>
               </div>
-              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
-                <CheckCircle2 className="w-3 h-3" /> 사용중
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                  <CheckCircle2 className="w-3 h-3" /> 사용중
+                </span>
+                {userRole !== 'VIEWER' && onDeleteTeam && (
+                  <button
+                    onClick={() => setDeletingTeam(t)}
+                    className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors"
+                    title={`${t.team_name} 삭제`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] text-slate-500 flex items-center justify-between">
@@ -157,6 +186,94 @@ export const AdminTeamsView: React.FC<AdminTeamsViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Team Confirmation Modal */}
+      {deletingTeam && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-sm overflow-hidden">
+            <div className="bg-rose-600 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-300" />
+                <h3 className="text-base font-bold text-white">팀/부서 삭제 확인</h3>
+              </div>
+              <button
+                onClick={() => setDeletingTeam(null)}
+                className="text-rose-200 hover:text-white"
+                disabled={isDeleting}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs">
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900">
+                <div className="font-bold text-sm text-rose-800">
+                  {deletingTeam.team_name} ({deletingTeam.team_code})
+                </div>
+                <p className="text-rose-700 text-[11px] mt-1 leading-relaxed">
+                  이 팀/부서를 삭제하면 연동된 예산 및 부서 권한 정보가 정리됩니다.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-slate-700 leading-snug">
+                  오삭제 방지를 위해 팀명{' '}
+                  <span className="font-black text-rose-700 bg-rose-100/80 px-1.5 py-0.5 rounded select-all">
+                    {deletingTeam.team_name}
+                  </span>
+                  을(를) 아래에 정확히 입력해 주세요.
+                </label>
+
+                <div className="relative">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={deleteConfirmTeamName}
+                    onChange={(e) => setDeleteConfirmTeamName(e.target.value)}
+                    placeholder={`"${deletingTeam.team_name}" 입력`}
+                    disabled={isDeleting}
+                    className={`w-full px-3.5 py-2.5 rounded-xl border text-base sm:text-sm font-semibold focus:outline-none transition-all ${
+                      deleteConfirmTeamName.trim() === deletingTeam.team_name.trim()
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/30 text-emerald-950'
+                        : deleteConfirmTeamName
+                        ? 'border-rose-300 ring-2 ring-rose-300/20 bg-rose-50/10 text-slate-900'
+                        : 'border-slate-300 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20 text-slate-900'
+                    }`}
+                  />
+                  {deleteConfirmTeamName.trim() === deletingTeam.team_name.trim() && (
+                    <span className="absolute right-3 top-2.5 text-emerald-600 flex items-center gap-1 text-[11px] font-bold">
+                      <CheckCircle2 className="w-4 h-4" /> 확인 완료
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeletingTeam(null);
+                    setDeleteConfirmTeamName('');
+                  }}
+                  disabled={isDeleting}
+                  className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={isDeleting || deleteConfirmTeamName.trim() !== deletingTeam.team_name.trim()}
+                  className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isDeleting ? '삭제 중...' : '팀 영구 삭제'}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

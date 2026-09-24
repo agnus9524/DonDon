@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { PermissionCode } from '../types';
+import { ROLE_PERMISSIONS } from '../data/initialData';
 import {
   LayoutDashboard,
   Receipt,
@@ -18,6 +19,7 @@ import {
   Shield,
   FolderGit2,
   Lock,
+  X,
 } from 'lucide-react';
 
 export type NavSection =
@@ -39,9 +41,9 @@ interface SidebarProps {
   userRole: string;
   isSuperAdmin: boolean;
   companyName: string;
-  // "로그인한 사람이 어디까지 할 수 있는가"를 메뉴 단계에서부터 정확히 반영하기 위해,
-  // 역할 이름이 아니라 서버가 계산한 실제 권한 코드 집합으로 메뉴 노출 여부를 결정한다.
-  permissions: Set<PermissionCode>;
+  permissions?: Set<PermissionCode>;
+  isOpenMobile?: boolean;
+  onCloseMobile?: () => void;
 }
 
 // 각 메뉴가 요구하는 최소 권한. hasPermission(code)가 false면 super admin이 아닌 한
@@ -70,103 +72,139 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isSuperAdmin,
   companyName,
   permissions,
+  isOpenMobile,
+  onCloseMobile,
 }) => {
-  const canAdmin = isSuperAdmin || userRole === 'ADMIN' || userRole === 'SUPER_ADMIN';
-  const hasPermission = (code: PermissionCode) => isSuperAdmin || permissions.has(code);
+  const activePerms = permissions || new Set(ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS.SUPER_ADMIN || []);
+  const canAdmin = isSuperAdmin || userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'ORG_ADMIN';
+  const hasPermission = (code: PermissionCode) =>
+    isSuperAdmin || userRole === 'SUPER_ADMIN' || userRole === 'ADMIN' || activePerms.has(code);
 
-  // 회사 관리(admin-companies)는 신규 회사 "등록"만 SUPER_ADMIN 전용이고, 목록/전환 자체는
-  // 소속된 모든 사용자에게 필요하므로 company.manage가 없어도 메뉴는 노출한다.
   const visibleNavItems = NAV_ITEMS.filter((item) => hasPermission(item.permission));
   const visibleAdminItems = ADMIN_ITEMS.filter(
     (item) => item.id === 'admin-companies' || hasPermission(item.permission)
   );
 
+  const handleItemClick = (sectionId: NavSection) => {
+    onSelectSection(sectionId);
+    if (onCloseMobile) {
+      onCloseMobile();
+    }
+  };
+
   return (
-    <aside className="w-64 bg-white border-r border-slate-200/80 flex flex-col shrink-0 min-h-[calc(100vh-4rem)]">
-      {/* Company context header */}
-      <div className="p-4 border-b border-slate-100 bg-slate-50/40">
-        <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-          현재 회계 장부
-        </div>
-        <div className="text-sm font-bold text-slate-900 truncate mt-0.5">
-          {companyName}
-        </div>
-        <div className="flex items-center gap-1.5 mt-2 text-[11px] text-emerald-700 font-medium">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>회사별 데이터 격리 가동 중</span>
-        </div>
-      </div>
+    <>
+      {/* Mobile Backdrop Overlay */}
+      {isOpenMobile && (
+        <div
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 md:hidden transition-opacity duration-200"
+          onClick={onCloseMobile}
+          aria-hidden="true"
+        />
+      )}
 
-      {/* Main Navigation */}
-      <div className="p-3 space-y-1 flex-1 overflow-y-auto">
-        <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-          회계 업무
-        </div>
-
-        {visibleNavItems.length === 0 && (
-          <div className="px-3 py-4 text-[11px] text-slate-400 flex items-center gap-2">
-            <Lock className="w-3.5 h-3.5" />
-            접근 가능한 메뉴가 없습니다.
-          </div>
-        )}
-
-        {visibleNavItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = currentSection === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => onSelectSection(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-slate-900 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-
-        {/* Admin Section */}
-        {visibleAdminItems.length > 0 && (
-          <div className="pt-4 mt-4 border-t border-slate-100">
-            <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-              <span>시스템 관리</span>
-              {canAdmin && (
-                <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.2 rounded font-bold">
-                  관리자
-                </span>
-              )}
+      <aside
+        className={`
+          fixed inset-y-0 left-0 z-50 w-72 bg-white flex flex-col transition-transform duration-200 ease-in-out shadow-2xl
+          md:static md:w-64 md:shadow-none md:translate-x-0 md:min-h-[calc(100vh-4rem)] md:border-r md:border-slate-200/80
+          ${isOpenMobile ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        `}
+      >
+        {/* Company context header with mobile close button */}
+        <div className="p-4 border-b border-slate-100 bg-slate-50/40 flex items-start justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              현재 회계 장부
             </div>
-
-            {visibleAdminItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = currentSection === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => onSelectSection(item.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
-                    isActive
-                      ? 'bg-indigo-50 text-indigo-900 font-semibold ring-1 ring-indigo-200'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
-                  <span className="truncate">{item.label}</span>
-                  {item.highlight && (
-                    <span className="ml-auto text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">
-                      ★
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+            <div className="text-sm font-bold text-slate-900 truncate mt-0.5" title={companyName}>
+              {companyName}
+            </div>
+            <div className="flex items-center gap-1.5 mt-2 text-[11px] text-emerald-700 font-medium">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>회사별 데이터 격리 가동 중</span>
+            </div>
           </div>
-        )}
-      </div>
+          {onCloseMobile && (
+            <button
+              onClick={onCloseMobile}
+              className="md:hidden -mr-1 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
+              aria-label="메뉴 닫기"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </div>
+
+        {/* Main Navigation */}
+        <div className="p-3 space-y-1 flex-1 overflow-y-auto">
+          <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+            회계 업무
+          </div>
+
+          {visibleNavItems.length === 0 && (
+            <div className="px-3 py-4 text-[11px] text-slate-400 flex items-center gap-2">
+              <Lock className="w-3.5 h-3.5" />
+              접근 가능한 메뉴가 없습니다.
+            </div>
+          )}
+
+          {visibleNavItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = currentSection === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => handleItemClick(item.id)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+
+          {/* Admin Section */}
+          {visibleAdminItems.length > 0 && (
+            <div className="pt-4 mt-4 border-t border-slate-100">
+              <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                <span>시스템 관리</span>
+                {canAdmin && (
+                  <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.2 rounded font-bold">
+                    관리자
+                  </span>
+                )}
+              </div>
+
+              {visibleAdminItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = currentSection === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleItemClick(item.id)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                      isActive
+                        ? 'bg-indigo-50 text-indigo-900 font-semibold ring-1 ring-indigo-200'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Icon className={`w-4 h-4 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
+                    <span className="truncate">{item.label}</span>
+                    {item.highlight && (
+                      <span className="ml-auto text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">
+                        ★
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
       {/* Footer Info */}
       <div className="p-3 border-t border-slate-100 bg-slate-50/50 text-[11px] text-slate-600">
@@ -174,5 +212,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="mt-0.5 text-slate-500">RLS & Company ID Isolation</div>
       </div>
     </aside>
+  </>
   );
 };

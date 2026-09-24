@@ -14,6 +14,8 @@ import {
   ExternalLink,
   X,
   Building,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface AdminCompanyViewProps {
@@ -21,6 +23,7 @@ interface AdminCompanyViewProps {
   currentCompanyId: string;
   onSelectCompany: (companyId: string) => void;
   onCreateCompany: (payload: Partial<Company>) => Promise<void>;
+  onDeleteCompany?: (companyId: string, confirmName?: string) => Promise<void>;
   isSuperAdmin: boolean;
 }
 
@@ -29,10 +32,14 @@ export const AdminCompanyView: React.FC<AdminCompanyViewProps> = ({
   currentCompanyId,
   onSelectCompany,
   onCreateCompany,
+  onDeleteCompany,
   isSuperAdmin,
 }) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingCompany, setDeletingCompany] = useState<Company | null>(null);
+  const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const [formData, setFormData] = useState({
     company_code: '',
@@ -43,6 +50,24 @@ export const AdminCompanyView: React.FC<AdminCompanyViewProps> = ({
     phone: '',
     email: '',
   });
+
+  const handleDeleteSubmit = async () => {
+    if (!deletingCompany || !onDeleteCompany) return;
+    if (deleteConfirmName.trim() !== deletingCompany.company_name.trim()) {
+      alert('입력하신 회사명이 일치하지 않습니다. 정확한 회사명을 입력해 주세요.');
+      return;
+    }
+    try {
+      setIsDeleting(true);
+      await onDeleteCompany(deletingCompany.id, deleteConfirmName.trim());
+      setDeletingCompany(null);
+      setDeleteConfirmName('');
+    } catch (err: any) {
+      alert(err.message || '회사 삭제 실패');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,7 +154,76 @@ export const AdminCompanyView: React.FC<AdminCompanyViewProps> = ({
           <span className="text-xs text-slate-400">행을 클릭하면 해당 회사의 장부로 즉시 전환됩니다.</span>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Card List (< md) */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {companies.map((c) => {
+            const isCurrent = c.id === currentCompanyId;
+            return (
+              <div
+                key={c.id}
+                className={`p-4 space-y-2.5 transition-colors ${
+                  isCurrent ? 'bg-indigo-50/40' : 'hover:bg-slate-50'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono text-xs font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                        {c.company_code}
+                      </span>
+                      <span className="font-bold text-slate-900 text-sm">{c.company_name}</span>
+                    </div>
+                    {isCurrent && (
+                      <span className="inline-block mt-1 text-[10px] bg-indigo-600 text-white font-bold px-1.5 py-0.5 rounded">
+                        현재 사용 중인 장부
+                      </span>
+                    )}
+                  </div>
+
+                  {isSuperAdmin && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeletingCompany(c);
+                        setDeleteConfirmName('');
+                      }}
+                      className="p-1.5 rounded-lg text-rose-500 hover:text-white hover:bg-rose-600 border border-rose-200 transition-colors shrink-0"
+                      title={`${c.company_name} 삭제`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-xs text-slate-500 space-y-0.5">
+                  <div>사업자번호: <span className="font-mono text-slate-700">{c.business_number}</span></div>
+                  <div>대표자: <span className="text-slate-700">{c.representative_name}</span></div>
+                </div>
+
+                <div className="pt-1 flex items-center justify-between">
+                  <div className="flex items-center gap-1 text-xs text-slate-600">
+                    <Users className="w-3.5 h-3.5 text-slate-400" />
+                    <span>{c.user_count || 1}명</span>
+                  </div>
+
+                  <button
+                    onClick={() => onSelectCompany(c.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors min-h-[36px] ${
+                      isCurrent
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white text-slate-800 border border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    {isCurrent ? '선택됨' : '이 장부로 전환'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Desktop Table (>= md) */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 uppercase font-semibold text-[11px]">
@@ -141,6 +235,9 @@ export const AdminCompanyView: React.FC<AdminCompanyViewProps> = ({
                 <th className="py-2.5 px-4">상태</th>
                 <th className="py-2.5 px-4">소속 사용자</th>
                 <th className="py-2.5 px-4 text-center">장부 전환</th>
+                {isSuperAdmin && (
+                  <th className="py-2.5 px-4 text-center w-20">회사 삭제</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -203,6 +300,21 @@ export const AdminCompanyView: React.FC<AdminCompanyViewProps> = ({
                         {isCurrent ? '사용 중' : '장부 열기'}
                       </button>
                     </td>
+                    {isSuperAdmin && (
+                      <td className="py-3.5 px-4 text-center">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeletingCompany(c);
+                            setDeleteConfirmName('');
+                          }}
+                          className="p-1.5 rounded-lg text-rose-500 hover:text-white hover:bg-rose-600 border border-rose-200 hover:border-rose-600 transition-colors"
+                          title={`${c.company_name} 삭제`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -329,6 +441,112 @@ export const AdminCompanyView: React.FC<AdminCompanyViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Company Confirmation Modal with Exact Name Confirmation */}
+      {deletingCompany && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="bg-rose-600 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-300" />
+                <h3 className="text-base font-bold text-white">회사(법인) 영구 삭제 확인</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setDeletingCompany(null);
+                  setDeleteConfirmName('');
+                }}
+                className="text-rose-200 hover:text-white"
+                disabled={isDeleting}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs">
+              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-900">
+                <div className="font-bold text-sm text-rose-800 flex items-center gap-1.5 mb-1">
+                  <span>{deletingCompany.company_name}</span>
+                  <span className="font-mono text-xs text-rose-600 font-normal">({deletingCompany.company_code})</span>
+                </div>
+                <p className="text-rose-700 text-[11px] leading-relaxed">
+                  주의: 이 법인을 삭제하면 소속된 모든 <strong>전표(거래내역), 예산, 부서(팀), 은행계좌, 거래처</strong> 데이터가 영구적으로 함께 삭제되며 복구할 수 없습니다.
+                </p>
+                {deletingCompany.id === currentCompanyId && (
+                  <div className="mt-2 pt-2 border-t border-rose-200 text-rose-800 font-bold text-[11px]">
+                    ※ 현재 선택된 활성 법인입니다. 삭제 즉시 다른 법인 장부로 자동 전환됩니다.
+                  </div>
+                )}
+              </div>
+
+              {/* Exact Company Name Verification Input */}
+              <div className="space-y-2 pt-1">
+                <label className="block text-xs font-medium text-slate-700 leading-snug">
+                  오삭제 방지를 위해 삭제할 회사명{' '}
+                  <span className="font-black text-rose-700 bg-rose-100/80 px-1.5 py-0.5 rounded select-all">
+                    {deletingCompany.company_name}
+                  </span>
+                  을(를) 아래에 정확히 입력해 주세요.
+                </label>
+
+                <div className="relative">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={deleteConfirmName}
+                    onChange={(e) => setDeleteConfirmName(e.target.value)}
+                    placeholder={`"${deletingCompany.company_name}" 입력`}
+                    disabled={isDeleting}
+                    className={`w-full px-3.5 py-2.5 rounded-xl border text-base sm:text-sm font-semibold focus:outline-none transition-all ${
+                      deleteConfirmName.trim() === deletingCompany.company_name.trim()
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/30 text-emerald-950'
+                        : deleteConfirmName
+                        ? 'border-rose-300 ring-2 ring-rose-300/20 bg-rose-50/10 text-slate-900'
+                        : 'border-slate-300 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20 text-slate-900'
+                    }`}
+                  />
+                  {deleteConfirmName.trim() === deletingCompany.company_name.trim() && (
+                    <span className="absolute right-3 top-2.5 text-emerald-600 flex items-center gap-1 text-[11px] font-bold">
+                      <CheckCircle className="w-4 h-4" /> 확인 완료
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-[11px]">
+                  {deleteConfirmName.trim() === deletingCompany.company_name.trim() ? (
+                    <span className="text-emerald-700 font-semibold">✓ 회사명이 일치합니다. 이제 삭제 버튼을 누를 수 있습니다.</span>
+                  ) : (
+                    <span className="text-slate-500">* 회사명이 정확히 일치해야 하단의 [영구 삭제] 버튼이 활성화됩니다.</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeletingCompany(null);
+                    setDeleteConfirmName('');
+                  }}
+                  disabled={isDeleting}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-medium min-h-[40px]"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteSubmit}
+                  disabled={isDeleting || deleteConfirmName.trim() !== deletingCompany.company_name.trim()}
+                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed shadow-xs transition-all min-h-[40px]"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>{isDeleting ? '삭제 진행 중...' : '회사 영구 삭제'}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

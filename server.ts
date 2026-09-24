@@ -111,11 +111,11 @@ async function startServer() {
   }
 
   const tenantAuthMiddleware = (req: TenantRequest, res: Response, next: NextFunction) => {
-    // Current authenticated user (default to Hong Gil-dong for demo/preview, or x-user-id header)
+    // Current authenticated user (default to agnus9524@gmail.com / usr_hong)
     const userId = (req.headers['x-user-id'] as string) || CURRENT_USER.id;
     const user = db.users.find((u) => u.id === userId) || CURRENT_USER;
     req.user = user;
-    req.isSuperAdmin = user.is_system_admin || user.is_super_admin;
+    req.isSuperAdmin = user.is_system_admin || user.is_super_admin || user.email === 'agnus9524@gmail.com';
 
     // Company context from header or query
     const companyId = (req.headers['x-company-id'] as string) || (req.query.company_id as string);
@@ -127,6 +127,17 @@ async function startServer() {
       );
       if (role) {
         req.userRole = role;
+      } else if (req.isSuperAdmin) {
+        // Super Admin gets implicit SUPER_ADMIN role in all companies
+        req.userRole = {
+          id: `ucr_sa_${companyId}`,
+          user_id: user.id,
+          company_id: companyId,
+          role_id: 'SUPER_ADMIN',
+          status: 'ACTIVE',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
       }
     }
     next();
@@ -159,10 +170,140 @@ async function startServer() {
         const role = userRoles.find((r) => r.company_id === comp.id);
         return {
           ...comp,
-          my_role: role ? role.role_id : req.isSuperAdmin ? 'SUPER_ADMIN' : 'VIEWER',
+          my_role: req.isSuperAdmin ? 'SUPER_ADMIN' : role ? role.role_id : 'VIEWER',
         };
       }),
     });
+  });
+
+  // Login Endpoint
+  app.post('/api/v1/auth/login', (req: Request, res: Response) => {
+    const { email, userId } = req.body || {};
+    let targetUser: User | undefined;
+
+    if (userId) {
+      targetUser = db.users.find((u) => u.id === userId);
+    } else if (email) {
+      const cleanEmail = String(email).trim().toLowerCase();
+      targetUser = db.users.find((u) => u.email.toLowerCase() === cleanEmail);
+
+      // agnus9524@gmail.com is guaranteed Super Admin
+      if (!targetUser && cleanEmail === 'agnus9524@gmail.com') {
+        targetUser = {
+          id: 'usr_hong',
+          auth_user_id: 'google-oauth2|agnus9524',
+          email: 'agnus9524@gmail.com',
+          name: '최고관리자 (agnus9524)',
+          department: '재무총괄 / 시스템총괄',
+          status: 'ACTIVE',
+          last_login_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          is_system_admin: true,
+          is_super_admin: true,
+        };
+        db.users.push(targetUser);
+      }
+    }
+
+    if (!targetUser) {
+      return res.status(401).json({ error: '등록되지 않은 사용자 계정입니다. 이메일을 다시 확인해주세요.' });
+    }
+
+    targetUser.last_login_at = new Date().toISOString();
+    targetUser.updated_at = new Date().toISOString();
+
+    const isSuperAdmin = !!(targetUser.is_system_admin || targetUser.is_super_admin || targetUser.email === 'agnus9524@gmail.com');
+    const userRoles = db.userCompanyRoles.filter((r) => r.user_id === targetUser!.id && r.status === 'ACTIVE');
+    const authorizedCompanies = isSuperAdmin
+      ? db.companies
+      : db.companies.filter((c) => userRoles.some((r) => r.company_id === c.id));
+
+    const teamRoles = db.userTeamRoles.filter((tr) => tr.user_id === targetUser!.id);
+
+    // Primary role label
+    let primaryRole = 'VIEWER';
+    if (isSuperAdmin) {
+      primaryRole = 'SUPER_ADMIN';
+    } else if (userRoles.some((r) => r.role_id === 'ORG_ADMIN')) {
+      primaryRole = 'ORG_ADMIN';
+    } else if (userRoles.some((r) => r.role_id === 'HQ_ACCOUNTANT')) {
+      primaryRole = 'HQ_ACCOUNTANT';
+    } else if (userRoles.some((r) => r.role_id === 'TEAM_MANAGER') || teamRoles.some((tr) => tr.role_id === 'TEAM_MANAGER')) {
+      primaryRole = 'TEAM_MANAGER';
+    } else if (userRoles.some((r) => r.role_id === 'TEAM_ACCOUNTANT') || teamRoles.some((tr) => tr.role_id === 'TEAM_ACCOUNTANT')) {
+      primaryRole = 'TEAM_ACCOUNTANT';
+    } else if (userRoles.length > 0) {
+      primaryRole = userRoles[0].role_id;
+    }
+
+    db.addAuditLog({
+      company_id: authorizedCompanies[0]?.id || 'system',
+      user_id: targetUser.id,
+      user_name: targetUser.name,
+      action: 'LOGIN',
+      entity_type: 'AUTH',
+      entity_id: targetUser.id,
+      after_data: { email: targetUser.email, role: primaryRole },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({
+      success: true,
+      user: targetUser,
+      primary_role: primaryRole,
+      is_super_admin: isSuperAdmin,
+      roles: userRoles,
+      team_roles: teamRoles,
+      companies: authorizedCompanies.map((comp) => {
+        const role = userRoles.find((r) => r.company_id === comp.id);
+        return {
+          ...comp,
+          my_role: isSuperAdmin ? 'SUPER_ADMIN' : role ? role.role_id : 'VIEWER',
+        };
+      }),
+    });
+  });
+
+  // Request Join Company Endpoint
+  app.post('/api/v1/auth/request-join', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const user = req.user!;
+    const { company_id, reason } = req.body || {};
+    const targetCompanyId = company_id || req.companyId;
+
+    const existing = db.userCompanyRoles.find(
+      (r) => r.user_id === user.id && r.company_id === targetCompanyId
+    );
+
+    if (existing) {
+      existing.status = 'PENDING';
+      existing.updated_at = new Date().toISOString();
+    } else {
+      db.userCompanyRoles.push({
+        id: `ucr_${Date.now()}`,
+        user_id: user.id,
+        company_id: targetCompanyId,
+        role_id: 'VIEWER',
+        status: 'PENDING',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    db.addAuditLog({
+      company_id: targetCompanyId,
+      user_id: user.id,
+      user_name: user.name,
+      action: 'CREATE',
+      entity_type: 'USER_COMPANY_ROLE_REQUEST',
+      entity_id: user.id,
+      after_data: { reason, status: 'PENDING' },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, message: '회사 가입 신청이 정상적으로 접수되었습니다.' });
   });
 
   // Companies List
@@ -283,6 +424,62 @@ async function startServer() {
     res.status(201).json({ company: newCompany });
   });
 
+  // Delete Company (Super Admin only)
+  app.delete('/api/v1/companies/:id', (req: TenantRequest, res: Response) => {
+    if (!req.isSuperAdmin) {
+      return res.status(403).json({ error: '회사 삭제는 최고관리자(SUPER_ADMIN)만 수행할 수 있습니다.' });
+    }
+
+    const companyId = req.params.id;
+    const compIdx = db.companies.findIndex((c) => c.id === companyId);
+    if (compIdx === -1) {
+      return res.status(404).json({ error: '삭제할 회사를 찾을 수 없습니다.' });
+    }
+
+    const targetCompany = db.companies[compIdx];
+
+    const { confirm_company_name } = req.body || {};
+    if (confirm_company_name !== undefined) {
+      if (String(confirm_company_name).trim() !== targetCompany.company_name.trim()) {
+        return res.status(400).json({
+          error: `입력하신 회사명 [${confirm_company_name}]이(가) 삭제 대상 회사명 [${targetCompany.company_name}]과 일치하지 않습니다.`,
+        });
+      }
+    }
+
+    // Cascade delete all records belonging to this company
+    db.companies.splice(compIdx, 1);
+    db.teams = db.teams.filter((t) => t.company_id !== companyId);
+    db.companyAccounts = db.companyAccounts.filter((ca) => ca.company_id !== companyId);
+    db.bankAccounts = db.bankAccounts.filter((ba) => ba.company_id !== companyId);
+    db.vendors = db.vendors.filter((v) => v.company_id !== companyId);
+    db.fiscalPeriods = db.fiscalPeriods.filter((fp) => fp.company_id !== companyId);
+    db.transactions = db.transactions.filter((tx) => tx.company_id !== companyId);
+    db.transactionAttachments = db.transactionAttachments.filter((att) => att.company_id !== companyId);
+    db.budgets = db.budgets.filter((b) => b.company_id !== companyId);
+    db.bankImports = db.bankImports.filter((bi) => bi.company_id !== companyId);
+    db.bankImportRows = db.bankImportRows.filter((bir) => bir.company_id !== companyId);
+    db.userCompanyRoles = db.userCompanyRoles.filter((ucr) => ucr.company_id !== companyId);
+
+    db.addAuditLog({
+      company_id: companyId,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'DELETE',
+      entity_type: 'COMPANY',
+      entity_id: companyId,
+      before_data: targetCompany,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({
+      success: true,
+      message: `[${targetCompany.company_name}] 회사가 성공적으로 삭제되었습니다.`,
+      deleted_id: companyId,
+    });
+  });
+
   // Guard: Multi-tenant Company Access check
   const requireCompanyAccess = (req: TenantRequest, res: Response, next: NextFunction) => {
     const companyId = req.companyId;
@@ -372,7 +569,64 @@ async function startServer() {
       updated_at: new Date().toISOString(),
     };
     db.teams.push(newTeam);
+
+    db.addAuditLog({
+      company_id: req.companyId!,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'CREATE',
+      entity_type: 'TEAM',
+      entity_id: newTeam.id,
+      after_data: newTeam,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
     res.status(201).json({ team: newTeam });
+  });
+
+  // Delete Team
+  app.delete('/api/v1/teams/:id', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const roleId = req.userRole?.role_id;
+    if (!req.isSuperAdmin && roleId !== 'ORG_ADMIN' && roleId !== 'SUPER_ADMIN' && roleId !== 'ADMIN') {
+      return res.status(403).json({ error: '팀(부서) 삭제 권한이 없습니다.' });
+    }
+
+    const teamId = req.params.id;
+    const teamIdx = db.teams.findIndex((t) => t.id === teamId && t.company_id === req.companyId);
+    if (teamIdx === -1) {
+      return res.status(404).json({ error: '삭제할 팀을 찾을 수 없습니다.' });
+    }
+
+    const deletedTeam = db.teams[teamIdx];
+    db.teams.splice(teamIdx, 1);
+
+    // Clean up team references in transactions & budgets
+    db.transactions.forEach((tx) => {
+      if (tx.company_id === req.companyId && tx.team_id === teamId) {
+        tx.team_id = '';
+      }
+    });
+    db.budgets = db.budgets.filter((b) => !(b.company_id === req.companyId && b.team_id === teamId));
+    db.userTeamRoles = db.userTeamRoles.filter((utr) => !(utr.company_id === req.companyId && utr.team_id === teamId));
+
+    db.addAuditLog({
+      company_id: req.companyId!,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'DELETE',
+      entity_type: 'TEAM',
+      entity_id: teamId,
+      before_data: deletedTeam,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({
+      success: true,
+      message: `[${deletedTeam.team_name}] 팀(부서)이 삭제되었습니다.`,
+      deleted_id: teamId,
+    });
   });
 
   // Accounts with Company Active Status (Method B)
@@ -390,6 +644,122 @@ async function startServer() {
     }));
 
     res.json({ accounts: result });
+  });
+
+  // Create new Account Code
+  app.post('/api/v1/accounts', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const roleId = req.userRole?.role_id;
+    if (
+      !req.isSuperAdmin &&
+      roleId !== 'ORG_ADMIN' &&
+      roleId !== 'SUPER_ADMIN' &&
+      roleId !== 'HQ_ACCOUNTANT' &&
+      roleId !== 'ADMIN'
+    ) {
+      return res.status(403).json({ error: '계정과목 생성 권한이 없습니다.' });
+    }
+
+    const { account_code, account_name, account_type, category, description, is_active } = req.body;
+    if (!account_code || !account_name || !account_type) {
+      return res.status(400).json({ error: '계정코드, 계정과목명, 분류(Type)는 필수 항목입니다.' });
+    }
+
+    const cleanCode = String(account_code).trim();
+    if (db.accounts.some((a) => a.account_code === cleanCode)) {
+      return res.status(400).json({ error: `계정코드 [${cleanCode}]는 이미 등록되어 있습니다.` });
+    }
+
+    const newAccount: Account = {
+      id: `acc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      account_code: cleanCode,
+      account_name: String(account_name).trim(),
+      account_type,
+      category: category || (account_type === 'EXPENSE' ? '판관비' : account_type === 'REVENUE' ? '사업수익' : '일반'),
+      description: description || '',
+      is_system: false,
+      created_at: new Date().toISOString(),
+    };
+
+    db.accounts.push(newAccount);
+
+    // Initialize for current company
+    db.companyAccounts.push({
+      id: `ca_${req.companyId}_${newAccount.id}`,
+      company_id: req.companyId!,
+      account_id: newAccount.id,
+      is_active: is_active !== false,
+      created_at: new Date().toISOString(),
+    });
+
+    db.addAuditLog({
+      company_id: req.companyId!,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'CREATE',
+      entity_type: 'ACCOUNT',
+      entity_id: newAccount.id,
+      after_data: newAccount,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.status(201).json({
+      account: {
+        ...newAccount,
+        is_active: is_active !== false,
+      },
+    });
+  });
+
+  // Delete Account Code
+  app.delete('/api/v1/accounts/:id', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    const roleId = req.userRole?.role_id;
+    if (
+      !req.isSuperAdmin &&
+      roleId !== 'ORG_ADMIN' &&
+      roleId !== 'SUPER_ADMIN' &&
+      roleId !== 'HQ_ACCOUNTANT' &&
+      roleId !== 'ADMIN'
+    ) {
+      return res.status(403).json({ error: '계정과목 삭제 권한이 없습니다.' });
+    }
+
+    const accountId = req.params.id;
+    const accIdx = db.accounts.findIndex((a) => a.id === accountId);
+    if (accIdx === -1) {
+      return res.status(404).json({ error: '삭제할 계정과목을 찾을 수 없습니다.' });
+    }
+
+    const targetAccount = db.accounts[accIdx];
+
+    // Check if account is used in transactions
+    const usedCount = db.transactions.filter((t) => t.account_id === accountId).length;
+    if (usedCount > 0) {
+      return res.status(400).json({
+        error: `계정과목 [${targetAccount.account_code} ${targetAccount.account_name}]은 이미 ${usedCount}건의 전표에서 사용 중이므로 삭제할 수 없습니다. 대신 [사용 여부]를 OFF로 변경해 주세요.`,
+      });
+    }
+
+    db.accounts.splice(accIdx, 1);
+    db.companyAccounts = db.companyAccounts.filter((ca) => ca.account_id !== accountId);
+
+    db.addAuditLog({
+      company_id: req.companyId!,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'DELETE',
+      entity_type: 'ACCOUNT',
+      entity_id: accountId,
+      before_data: targetAccount,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({
+      success: true,
+      message: `[${targetAccount.account_code} ${targetAccount.account_name}] 계정과목이 삭제되었습니다.`,
+      deleted_id: accountId,
+    });
   });
 
   // Toggle Account Active Status for Current Company

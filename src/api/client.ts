@@ -68,6 +68,47 @@ class ApiClient {
     return res.json();
   }
 
+  async login(email: string): Promise<any> {
+    const res = await fetch('/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '로그인 실패');
+    }
+    const data = await res.json();
+    if (data.user) {
+      this.setUser(data.user.id);
+      localStorage.setItem('dondon_is_logged_in', 'true');
+    }
+    return data;
+  }
+
+  logout() {
+    localStorage.removeItem('dondon_is_logged_in');
+    localStorage.removeItem('dondon_current_user_id');
+    localStorage.removeItem('dondon_current_company_id');
+  }
+
+  async isLoggedIn(): Promise<boolean> {
+    return localStorage.getItem('dondon_is_logged_in') === 'true';
+  }
+
+  async requestJoinCompany(companyId: string, reason: string): Promise<any> {
+    const res = await fetch('/api/v1/auth/request-join', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ company_id: companyId, reason }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '가입 신청 실패');
+    }
+    return res.json();
+  }
+
   async getCompanies(): Promise<Company[]> {
     const res = await fetch('/api/v1/companies', { headers: this.getHeaders() });
     if (!res.ok) throw new Error('회사 목록 조회 실패');
@@ -87,6 +128,18 @@ class ApiClient {
     }
     const data = await res.json();
     return data.company;
+  }
+
+  async deleteCompany(id: string, confirmCompanyName?: string): Promise<void> {
+    const res = await fetch(`/api/v1/companies/${id}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+      body: confirmCompanyName ? JSON.stringify({ confirm_company_name: confirmCompanyName }) : undefined,
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '회사 삭제 실패');
+    }
   }
 
   async getFiscalPeriods(): Promise<FiscalPeriod[]> {
@@ -127,11 +180,47 @@ class ApiClient {
     return data.team;
   }
 
+  async deleteTeam(id: string): Promise<void> {
+    const res = await fetch(`/api/v1/teams/${id}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '팀 삭제 실패');
+    }
+  }
+
   async getAccounts(): Promise<(Account & { is_active: boolean })[]> {
     const res = await fetch('/api/v1/accounts', { headers: this.getHeaders() });
     if (!res.ok) throw new Error('계정과목 목록 조회 실패');
     const data = await res.json();
     return data.accounts;
+  }
+
+  async createAccount(payload: Partial<Account> & { is_active?: boolean }): Promise<Account & { is_active: boolean }> {
+    const res = await fetch('/api/v1/accounts', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '계정과목 생성 실패');
+    }
+    const data = await res.json();
+    return data.account;
+  }
+
+  async deleteAccount(id: string): Promise<void> {
+    const res = await fetch(`/api/v1/accounts/${id}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '계정과목 삭제 실패');
+    }
   }
 
   async toggleCompanyAccount(accountId: string): Promise<boolean> {

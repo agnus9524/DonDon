@@ -246,13 +246,13 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={exportCSV}
             className="px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 shadow-2xs"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>장부 엑셀(CSV)</span>
+            <span className="hidden xs:inline">장부</span> 엑셀(CSV)
           </button>
           <button
             onClick={onOpenBankImport}
@@ -331,19 +331,19 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
         {/* Aggregated Filter Summary Strip */}
         <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
             <span className="text-slate-500">
-              조회 결과: <strong className="text-slate-900 font-mono">{filtered.length}</strong>건
+              조회: <strong className="text-slate-900 font-mono">{filtered.length}</strong>건
             </span>
-            <span className="text-slate-400">|</span>
+            <span className="text-slate-400 hidden sm:inline">|</span>
             <span>
               총 수입: <strong className="text-emerald-600 font-mono">{formatKRW(totalFilteredIncome)}</strong>
             </span>
-            <span className="text-slate-400">|</span>
+            <span className="text-slate-400 hidden sm:inline">|</span>
             <span>
               총 지출: <strong className="text-rose-600 font-mono">{formatKRW(totalFilteredExpense)}</strong>
             </span>
-            <span className="text-slate-400">|</span>
+            <span className="text-slate-400 hidden sm:inline">|</span>
             <span>
               차인잔액:{' '}
               <strong className={`font-mono ${filteredNet >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>
@@ -368,9 +368,92 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         </div>
       </div>
 
-      {/* Ledger Table */}
+      {/* Ledger: Mobile Card View (< md) and Desktop Table (>= md) */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* Mobile Card List View */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {filtered.length === 0 ? (
+            <div className="py-12 text-center text-slate-400 text-xs">
+              해당 조건에 맞는 거래 전표가 없습니다.
+            </div>
+          ) : (
+            filtered.map((t) => {
+              const isIncome = t.transaction_type === 'INCOME';
+              return (
+                <div key={t.id} className="p-4 space-y-2 hover:bg-slate-50/70 transition-colors">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                          isIncome ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                        }`}
+                      >
+                        {isIncome ? '수입' : '지출'}
+                      </span>
+                      <span className="font-mono text-slate-500 text-[11px]">{t.transaction_date}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-[10px] text-slate-400">{t.id}</span>
+                      {canDelete && !isViewer && (
+                        <button
+                          onClick={() => {
+                            if (confirm('이 전표를 삭제하시겠습니까?')) {
+                              onDeleteTransaction(t.id);
+                            }
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                          title="전표 삭제"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-slate-900 text-sm leading-snug">
+                        {t.description}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                        <span className="font-semibold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">
+                          {accountMap.get(t.account_id) || '-'}
+                        </span>
+                        <span>{teamMap.get(t.team_id) || '-'}</span>
+                        {t.vendor_id && (
+                          <span className="text-slate-400">· {vendorMap.get(t.vendor_id)}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div
+                        className={`font-mono font-bold text-base ${
+                          isIncome ? 'text-emerald-600' : 'text-slate-900'
+                        }`}
+                      >
+                        {isIncome ? '+' : '-'}{formatNumber(t.total_amount)}원
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                        {t.payment_method === 'BANK_TRANSFER' ? '계좌이체' : t.payment_method === 'CORPORATE_CARD' ? '법인카드' : '기타'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {t.memo && (
+                    <div className="text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                      {t.memo}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 uppercase font-semibold text-[11px]">

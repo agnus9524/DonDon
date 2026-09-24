@@ -29,9 +29,13 @@ import { AdminTeamsView } from './components/AdminTeamsView';
 import { AdminAccountsView } from './components/AdminAccountsView';
 import { AdminUsersView } from './components/AdminUsersView';
 import { AdminVendorsView } from './components/AdminVendorsView';
+import { AdminPermissionsView } from './components/AdminPermissionsView';
+import { MobileBottomNav } from './components/MobileBottomNav';
+import { LoginView } from './components/LoginView';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(api.isLoggedIn());
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
@@ -40,8 +44,9 @@ export default function App() {
   const [currentRole, setCurrentRole] = useState<string>('VIEWER');
   const [allUserRoles, setAllUserRoles] = useState<UserCompanyRole[]>([]);
 
-  // Section navigation
+  // Section navigation & Mobile state
   const [currentSection, setCurrentSection] = useState<NavSection>('dashboard');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Domain data strictly scoped to currentCompany
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -56,6 +61,23 @@ export default function App() {
   const [isBankImportOpen, setIsBankImportOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleLogin = async (emailOrId: string) => {
+    await api.login(emailOrId);
+    setIsLoggedIn(true);
+    await loadInitialData();
+  };
+
+  const handleLogout = () => {
+    api.logout();
+    setIsLoggedIn(false);
+    setCurrentUser(null);
+    setCurrentCompany(null);
+  };
+
+  const handleRequestJoinCompany = async (companyId: string, reason: string) => {
+    await api.requestJoinCompany(companyId, reason);
+  };
 
   // Initialize and load user & tenant auth
   const loadInitialData = useCallback(async () => {
@@ -107,33 +129,19 @@ export default function App() {
     }
   }, []);
 
-  // Load domain data for a given company
-  const loadCompanyData = async (companyId: string) => {
-    try {
-      const [txData, bankData, teamData, accData, budData, venData] = await Promise.all([
-        api.getTransactions(),
-        api.getBankAccounts(),
-        api.getTeams(),
-        api.getAccounts(),
-        api.getBudgets(2026),
-        api.getVendors(),
-      ]);
-
-      setTransactions(txData.transactions || []);
-      setBankAccounts(bankData || []);
-      setTeams(teamData || []);
-      setAccounts(accData || []);
-      setBudgets(budData || []);
-      setVendors(venData || []);
-    } catch (err: any) {
-      console.error('Company data load error:', err);
-      setErrorMessage(err.message || '회사 데이터를 조회하지 못했습니다.');
-    }
-  };
-
   useEffect(() => {
-    loadInitialData();
-  }, [loadInitialData]);
+    if (isLoggedIn) {
+      loadInitialData();
+    } else {
+      fetch('/api/v1/companies')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && data.companies) setAllCompanies(data.companies);
+        })
+        .catch(() => {});
+      setIsLoading(false);
+    }
+  }, [isLoggedIn, loadInitialData]);
 
   // Handler: Switch company
   const handleSelectCompany = async (companyId: string) => {
@@ -218,10 +226,28 @@ export default function App() {
     );
   };
 
+  // Handler: Create account
+  const handleCreateAccount = async (payload: any) => {
+    const newAccount = await api.createAccount(payload);
+    setAccounts((prev) => [...prev, newAccount]);
+  };
+
+  // Handler: Delete account
+  const handleDeleteAccount = async (accountId: string) => {
+    await api.deleteAccount(accountId);
+    setAccounts((prev) => prev.filter((a) => a.id !== accountId));
+  };
+
   // Handler: Add team
   const handleAddTeam = async (name: string, code?: string) => {
     const newTeam = await api.createTeam(name, code);
     setTeams((prev) => [...prev, newTeam]);
+  };
+
+  // Handler: Delete team
+  const handleDeleteTeam = async (teamId: string) => {
+    await api.deleteTeam(teamId);
+    setTeams((prev) => prev.filter((t) => t.id !== teamId));
   };
 
   // Handler: Create company
@@ -231,6 +257,24 @@ export default function App() {
     setUserCompanies((prev) => [...prev, { ...newComp, my_role: 'ADMIN' }]);
     // Switch to the new company
     await handleSelectCompany(newComp.id);
+  };
+
+  // Handler: Delete company
+  const handleDeleteCompany = async (companyId: string, confirmName?: string) => {
+    await api.deleteCompany(companyId, confirmName);
+    setAllCompanies((prev) => prev.filter((c) => c.id !== companyId));
+    setUserCompanies((prev) => prev.filter((c) => c.id !== companyId));
+
+    // If currently selected company was deleted, switch to another company
+    if (currentCompany?.id === companyId) {
+      const remaining = allCompanies.filter((c) => c.id !== companyId);
+      if (remaining.length > 0) {
+        await handleSelectCompany(remaining[0].id);
+      } else {
+        setCurrentCompany(null);
+        setIsCompanySelectorOpen(true);
+      }
+    }
   };
 
   // Handler: Assign User Role
@@ -246,15 +290,13 @@ export default function App() {
     setVendors((prev) => [...prev, newVendor]);
   };
 
-  if (!currentUser) {
+  if (!isLoggedIn || !currentUser) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-        <div className="text-center text-white space-y-3">
-          <div className="w-10 h-10 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto" />
-          <div className="text-lg font-bold">don don 통합 회계시스템 로딩 중...</div>
-          <div className="text-xs text-slate-400">멀티테넌트 인증 및 테넌트 장부를 준비하고 있습니다.</div>
-        </div>
-      </div>
+      <LoginView
+        onLogin={handleLogin}
+        companies={allCompanies.length > 0 ? allCompanies : []}
+        onRequestJoinCompany={handleRequestJoinCompany}
+      />
     );
   }
 
@@ -281,21 +323,28 @@ export default function App() {
         onOpenCompanySelector={() => setIsCompanySelectorOpen(true)}
         onRefresh={() => currentCompany && loadCompanyData(currentCompany.id)}
         isLoading={isLoading}
+        onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        onLogout={handleLogout}
       />
 
       {/* Main Body */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
         {/* Sidebar */}
         <Sidebar
           currentSection={currentSection}
-          onSelectSection={setCurrentSection}
+          onSelectSection={(sec) => {
+            setCurrentSection(sec);
+            setIsMobileMenuOpen(false);
+          }}
           userRole={currentRole}
           isSuperAdmin={isSuperAdmin}
           companyName={currentCompany ? currentCompany.company_name : '회사 선택 대기'}
+          isOpenMobile={isMobileMenuOpen}
+          onCloseMobile={() => setIsMobileMenuOpen(false)}
         />
 
         {/* Dynamic Main Content Canvas */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-8 max-w-7xl mx-auto w-full">
+        <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-8 pb-20 md:pb-8 max-w-7xl mx-auto w-full min-w-0">
           {errorMessage && (
             <div className="mb-6 p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl flex items-center justify-between gap-3 text-xs shadow-2xs">
               <div className="flex items-center gap-2">
@@ -379,6 +428,7 @@ export default function App() {
                   currentCompanyId={currentCompany.id}
                   onSelectCompany={handleSelectCompany}
                   onCreateCompany={handleCreateCompany}
+                  onDeleteCompany={handleDeleteCompany}
                   isSuperAdmin={isSuperAdmin}
                 />
               )}
@@ -389,6 +439,7 @@ export default function App() {
                   teams={teams}
                   userRole={currentRole}
                   onAddTeam={handleAddTeam}
+                  onDeleteTeam={handleDeleteTeam}
                 />
               )}
 
@@ -397,6 +448,8 @@ export default function App() {
                   currentCompany={currentCompany}
                   accounts={accounts}
                   onToggleAccount={handleToggleAccount}
+                  onCreateAccount={handleCreateAccount}
+                  onDeleteAccount={handleDeleteAccount}
                   userRole={currentRole}
                 />
               )}
@@ -405,6 +458,7 @@ export default function App() {
                 <AdminUsersView
                   users={allUsers}
                   companies={allCompanies}
+                  teams={teams}
                   userRoles={allUserRoles}
                   currentCompany={currentCompany}
                   currentUserId={currentUser.id}
@@ -421,10 +475,25 @@ export default function App() {
                   onAddVendor={handleAddVendor}
                 />
               )}
+
+              {currentSection === 'admin-permissions' && (
+                <AdminPermissionsView currentCompany={currentCompany} />
+              )}
             </>
           )}
         </main>
       </div>
+
+      {/* Mobile Bottom Navigation Bar (md:hidden) */}
+      <MobileBottomNav
+        currentSection={currentSection}
+        onSelectSection={(section) => {
+          setCurrentSection(section);
+          setIsMobileMenuOpen(false);
+        }}
+        onOpenAllMenu={() => setIsMobileMenuOpen(true)}
+        isSuperAdmin={isSuperAdmin}
+      />
 
       {/* Company Selector Modal (Prompt Requirement) */}
       <CompanySelectorModal

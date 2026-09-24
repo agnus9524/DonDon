@@ -90,17 +90,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mt-2 md:mt-0">
             <button
               onClick={onOpenAddTransaction}
-              className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-sm px-4 py-2.5 rounded-xl transition-all shadow-xs flex items-center gap-1.5"
+              className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-sm px-4 py-2.5 rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 min-h-[44px]"
             >
               <Receipt className="w-4 h-4" />
               <span>+ 새 전표 작성</span>
             </button>
             <button
               onClick={onOpenBankImport}
-              className="bg-slate-700/80 hover:bg-slate-700 text-white font-medium text-sm px-4 py-2.5 rounded-xl transition-all border border-slate-600/60 flex items-center gap-1.5"
+              className="bg-slate-700/80 hover:bg-slate-700 text-white font-medium text-sm px-4 py-2.5 rounded-xl transition-all border border-slate-600/60 flex items-center justify-center gap-1.5 min-h-[44px]"
             >
               <Landmark className="w-4 h-4" />
               <span>은행 엑셀 가져오기</span>
@@ -285,7 +285,52 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="md:hidden divide-y divide-slate-100">
+          {recentTxs.map((t) => {
+            const isIncome = t.transaction_type === 'INCOME';
+            return (
+              <div key={t.id} className="p-4 space-y-1.5 hover:bg-slate-50 transition-colors">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`font-semibold px-2 py-0.5 rounded text-[10px] ${
+                        isIncome ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                      }`}
+                    >
+                      {isIncome ? '수입' : '지출'}
+                    </span>
+                    <span className="font-mono text-slate-500 text-[11px]">{t.transaction_date}</span>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-[10px] text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full font-medium">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    {t.status === 'CONFIRMED' ? '확정' : '승인'}
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 pt-0.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-slate-900 text-sm truncate">
+                      {t.description}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      {accountMap.get(t.account_id) || '계정'} · {teamMap.get(t.team_id) || '미지정'}
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span
+                      className={`font-mono font-bold text-base ${
+                        isIncome ? 'text-emerald-700' : 'text-slate-900'
+                      }`}
+                    >
+                      {isIncome ? '+' : '-'}{formatNumber(t.total_amount)}원
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 uppercase font-semibold text-[11px]">

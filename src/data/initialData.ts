@@ -23,6 +23,7 @@ import {
   BankImport,
   BankImportRow,
   AuditLog,
+  PermissionCode,
 } from '../types';
 
 // 1. 회사 companies
@@ -74,10 +75,10 @@ export const INITIAL_COMPANIES: Company[] = [
 // 2. 사용자 users (Google 로그인 연동, company_id 없음)
 export const CURRENT_USER: User = {
   id: 'usr_hong',
-  auth_user_id: 'google-oauth2|10928374619283',
+  auth_user_id: 'google-oauth2|agnus9524',
   email: 'agnus9524@gmail.com',
-  name: '홍길동',
-  department: '재무총괄',
+  name: '최고관리자 (agnus9524)',
+  department: '재무총괄 / 시스템총괄',
   status: 'ACTIVE',
   last_login_at: '2026-09-22T08:30:00Z',
   created_at: '2025-01-01T00:00:00Z',
@@ -141,11 +142,35 @@ export const INITIAL_ALL_USERS: User[] = [
     auth_user_id: 'google-oauth2|60918237461066',
     email: 'choi@abc-corp.kr',
     name: '최개발',
-    department: '개발팀',
+    department: '개발팀 (팀장)',
     status: 'ACTIVE',
     last_login_at: '2026-09-22T01:10:00Z',
     created_at: '2025-03-10T09:00:00Z',
     updated_at: '2026-09-22T01:10:00Z',
+    is_system_admin: false,
+  },
+  {
+    id: 'usr_han',
+    auth_user_id: 'google-oauth2|70918237461077',
+    email: 'accountant@daechul-youth.org',
+    name: '한회계',
+    department: '재무회계본부',
+    status: 'ACTIVE',
+    last_login_at: '2026-09-22T03:15:00Z',
+    created_at: '2025-01-20T09:00:00Z',
+    updated_at: '2026-09-22T03:15:00Z',
+    is_system_admin: false,
+  },
+  {
+    id: 'usr_viewer',
+    auth_user_id: 'google-oauth2|80918237461088',
+    email: 'viewer@daechul-youth.org',
+    name: '윤열람',
+    department: '외부감사/모니터링단',
+    status: 'ACTIVE',
+    last_login_at: '2026-09-21T09:40:00Z',
+    created_at: '2025-02-01T09:00:00Z',
+    updated_at: '2026-09-21T09:40:00Z',
     is_system_admin: false,
   },
 ];
@@ -220,6 +245,9 @@ export const INITIAL_PERMISSIONS: Permission[] = [
   { id: 'p_acc_manage', permission_code: 'account.manage', permission_name: '계정과목 관리', description: '회사 계정과목 활성화 설정' },
   { id: 'p_bank_manage', permission_code: 'bank_account.manage', permission_name: '은행계좌 관리', description: '회사 은행계좌 등록/관리' },
   { id: 'p_ven_manage', permission_code: 'vendor.manage', permission_name: '거래처 관리', description: '거래처 등록/관리' },
+  { id: 'p_user_view', permission_code: 'user.view', permission_name: '사용자 조회', description: '소속 사용자 목록 열람' },
+  { id: 'p_team_view', permission_code: 'team.view', permission_name: '팀/부서 조회', description: '소속 팀/부서 정보 조회' },
+  { id: 'p_role_manage', permission_code: 'role.manage', permission_name: '권한 설정 관리', description: '역할별 권한 매트릭스 설정' },
 ];
 
 // 5. 역할-권한 role_permissions
@@ -247,6 +275,18 @@ export const INITIAL_ROLE_PERMISSIONS: RolePermission[] = [
   { role_id: 'role_hq_accountant', permission_id: 'p_bank_manage' },
   { role_id: 'role_hq_accountant', permission_id: 'p_ven_manage' },
 
+  // TEAM_MANAGER: 팀 관리자
+  { role_id: 'role_team_manager', permission_id: 'p_dash_view' },
+  { role_id: 'role_team_manager', permission_id: 'p_tx_view' },
+  { role_id: 'role_team_manager', permission_id: 'p_tx_create' },
+  { role_id: 'role_team_manager', permission_id: 'p_tx_update' },
+  { role_id: 'role_team_manager', permission_id: 'p_budget_view' },
+  { role_id: 'role_team_manager', permission_id: 'p_budget_update' },
+  { role_id: 'role_team_manager', permission_id: 'p_rep_month' },
+  { role_id: 'role_team_manager', permission_id: 'p_cash_view' },
+  { role_id: 'role_team_manager', permission_id: 'p_team_view' },
+  { role_id: 'role_team_manager', permission_id: 'p_user_view' },
+
   // TEAM_ACCOUNTANT
   { role_id: 'role_team_accountant', permission_id: 'p_dash_view' },
   { role_id: 'role_team_accountant', permission_id: 'p_tx_view' },
@@ -265,15 +305,12 @@ export const INITIAL_ROLE_PERMISSIONS: RolePermission[] = [
 
 // 6. 사용자-회사-권한 user_company_roles (멀티 회사 구조 핵심)
 export const INITIAL_USER_COMPANY_ROLES: UserCompanyRole[] = [
-  // 홍길동:
-  // 대철청소년회 -> HQ_ACCOUNTANT
-  // ABC 주식회사 -> TEAM_ACCOUNTANT
-  // XYZ 법인     -> VIEWER
+  // 최고관리자 (agnus9524@gmail.com): 모든 회사에 SUPER_ADMIN 최고 권한 부여
   {
     id: 'ucr_hong_daechul',
     user_id: 'usr_hong',
     company_id: 'comp_daechul',
-    role_id: 'HQ_ACCOUNTANT',
+    role_id: 'SUPER_ADMIN',
     status: 'ACTIVE',
     created_at: '2025-01-10T09:00:00Z',
     updated_at: '2026-09-01T10:00:00Z',
@@ -282,7 +319,7 @@ export const INITIAL_USER_COMPANY_ROLES: UserCompanyRole[] = [
     id: 'ucr_hong_abc',
     user_id: 'usr_hong',
     company_id: 'comp_abc',
-    role_id: 'TEAM_ACCOUNTANT',
+    role_id: 'SUPER_ADMIN',
     status: 'ACTIVE',
     created_at: '2025-02-15T09:00:00Z',
     updated_at: '2026-09-01T10:00:00Z',
@@ -291,7 +328,7 @@ export const INITIAL_USER_COMPANY_ROLES: UserCompanyRole[] = [
     id: 'ucr_hong_xyz',
     user_id: 'usr_hong',
     company_id: 'comp_xyz',
-    role_id: 'VIEWER',
+    role_id: 'SUPER_ADMIN',
     status: 'ACTIVE',
     created_at: '2025-05-20T09:00:00Z',
     updated_at: '2026-09-01T10:00:00Z',
@@ -308,6 +345,15 @@ export const INITIAL_USER_COMPANY_ROLES: UserCompanyRole[] = [
     updated_at: '2026-09-01T10:00:00Z',
   },
   {
+    id: 'ucr_han_daechul',
+    user_id: 'usr_han',
+    company_id: 'comp_daechul',
+    role_id: 'HQ_ACCOUNTANT',
+    status: 'ACTIVE',
+    created_at: '2025-01-20T09:00:00Z',
+    updated_at: '2026-09-01T10:00:00Z',
+  },
+  {
     id: 'ucr_park_daechul',
     user_id: 'usr_park',
     company_id: 'comp_daechul',
@@ -317,12 +363,30 @@ export const INITIAL_USER_COMPANY_ROLES: UserCompanyRole[] = [
     updated_at: '2026-09-01T10:00:00Z',
   },
   {
+    id: 'ucr_viewer_daechul',
+    user_id: 'usr_viewer',
+    company_id: 'comp_daechul',
+    role_id: 'VIEWER',
+    status: 'ACTIVE',
+    created_at: '2025-02-01T09:00:00Z',
+    updated_at: '2026-09-01T10:00:00Z',
+  },
+  {
     id: 'ucr_lee_abc',
     user_id: 'usr_lee',
     company_id: 'comp_abc',
     role_id: 'ORG_ADMIN',
     status: 'ACTIVE',
     created_at: '2025-02-15T09:00:00Z',
+    updated_at: '2026-09-01T10:00:00Z',
+  },
+  {
+    id: 'ucr_choi_abc',
+    user_id: 'usr_choi',
+    company_id: 'comp_abc',
+    role_id: 'TEAM_MANAGER',
+    status: 'ACTIVE',
+    created_at: '2025-03-10T09:00:00Z',
     updated_at: '2026-09-01T10:00:00Z',
   },
   {
@@ -1030,8 +1094,22 @@ export const ROLE_DEFINITIONS: Record<
     badgeClass: 'bg-purple-100 text-purple-800 border-purple-200',
     description: '전체 법인 통합 관리 및 시스템 전권',
   },
+  ADMIN: {
+    label: '법인 관리자 (Admin)',
+    name: '법인 관리자',
+    color: 'bg-blue-100 text-blue-800 border-blue-200',
+    badgeClass: 'bg-blue-100 text-blue-800 border-blue-200',
+    description: '회사 내 전체 권한 (마감/회계/팀/예산)',
+  },
   COMPANY_ADMIN: {
     label: '법인 관리자 (Company Admin)',
+    name: '법인 관리자',
+    color: 'bg-blue-100 text-blue-800 border-blue-200',
+    badgeClass: 'bg-blue-100 text-blue-800 border-blue-200',
+    description: '회사 내 전체 권한 (마감/회계/팀/예산)',
+  },
+  ORG_ADMIN: {
+    label: '법인 관리자 (Org Admin)',
     name: '법인 관리자',
     color: 'bg-blue-100 text-blue-800 border-blue-200',
     badgeClass: 'bg-blue-100 text-blue-800 border-blue-200',
@@ -1044,12 +1122,33 @@ export const ROLE_DEFINITIONS: Record<
     badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
     description: '전표 등록/수정/삭제, 예산, 엑셀 연동',
   },
+  HQ_ACCOUNTANT: {
+    label: '본사 회계담당 (HQ Accountant)',
+    name: '본사 회계담당',
+    color: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+    description: '법인 전사 회계 전표, 계좌, 예산 관리',
+  },
+  TEAM_MANAGER: {
+    label: '팀 관리자 (Team Manager)',
+    name: '팀 관리자',
+    color: 'bg-amber-100 text-amber-800 border-amber-200',
+    badgeClass: 'bg-amber-100 text-amber-800 border-amber-200',
+    description: '소속 팀 전표 조회/작성 및 예산 모니터링',
+  },
   MANAGER: {
     label: '부서장 (Manager)',
     name: '부서장',
     color: 'bg-amber-100 text-amber-800 border-amber-200',
     badgeClass: 'bg-amber-100 text-amber-800 border-amber-200',
     description: '소속 팀 전표 조회/작성 및 예산 모니터링',
+  },
+  TEAM_ACCOUNTANT: {
+    label: '팀 회계담당 (Team Accountant)',
+    name: '팀 회계담당',
+    color: 'bg-teal-100 text-teal-800 border-teal-200',
+    badgeClass: 'bg-teal-100 text-teal-800 border-teal-200',
+    description: '소속 부서 전표 작성 및 예산 조회',
   },
   VIEWER: {
     label: '단순 조회자 (Viewer)',
@@ -1058,5 +1157,131 @@ export const ROLE_DEFINITIONS: Record<
     badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
     description: '읽기 전용 (전표 및 결산보고서 열람)',
   },
+};
+
+export interface PermissionDefinition {
+  code: PermissionCode;
+  name: string;
+  group: string;
+  description: string;
+}
+
+export const PERMISSION_DEFINITIONS: PermissionDefinition[] = [
+  { code: 'dashboard.view', name: '대시보드 조회', group: '대시보드', description: '회사 대시보드 지표 조회' },
+  { code: 'transaction.view', name: '전표 목록/상세 조회', group: '전표 관리', description: '전표 목록 및 상세 조회' },
+  { code: 'transaction.create', name: '전표 작성', group: '전표 관리', description: '신규 전표 등록' },
+  { code: 'transaction.update', name: '전표 수정', group: '전표 관리', description: '작성 중 전표 수정' },
+  { code: 'transaction.confirm', name: '전표 승인', group: '전표 관리', description: '전표 회계 승인' },
+  { code: 'transaction.cancel', name: '전표 취소', group: '전표 관리', description: '전표 취소 처리' },
+  { code: 'bank_import.view', name: '은행 내역 조회', group: '은행 관리', description: '가져온 은행 계좌 및 내역 조회' },
+  { code: 'bank_import.create', name: '은행 엑셀 가져오기', group: '은행 관리', description: '은행 엑셀 업로드 및 전표 변환' },
+  { code: 'budget.view', name: '예산 조회', group: '예산 관리', description: '팀/계정별 예산 조회' },
+  { code: 'budget.create', name: '예산 편성', group: '예산 관리', description: '신규 예산 배정' },
+  { code: 'budget.update', name: '예산 변경', group: '예산 관리', description: '예산 금액 수정' },
+  { code: 'report.monthly', name: '월간 결산 보고서', group: '결산/보고서', description: '월간 수지보고서 및 손익계산서 조회' },
+  { code: 'report.quarterly', name: '분기 결산 보고서', group: '결산/보고서', description: '분기 결산보고서 조회' },
+  { code: 'report.annual', name: '연간 결산 보고서', group: '결산/보고서', description: '연간 결산보고서 조회' },
+  { code: 'ledger.view', name: '총계정원장', group: '결산/보고서', description: '계정과목별 원장 조회' },
+  { code: 'cashbook.view', name: '현금출납장', group: '결산/보고서', description: '현금/예금 출납장 조회' },
+  { code: 'user.view', name: '사용자 조회', group: '시스템/관리', description: '소속 사용자 목록 열람' },
+  { code: 'user.manage', name: '사용자 관리', group: '시스템/관리', description: '사용자 권한 및 계정 관리' },
+  { code: 'company.manage', name: '회사 정보 관리', group: '시스템/관리', description: '회사 기본정보 수정 및 설정' },
+  { code: 'team.view', name: '팀/부서 조회', group: '시스템/관리', description: '소속 팀/부서 정보 조회' },
+  { code: 'team.manage', name: '팀/부서 관리', group: '시스템/관리', description: '팀 추가 및 관리' },
+  { code: 'account.manage', name: '계정과목 관리', group: '시스템/관리', description: '회사 계정과목 활성화 설정' },
+  { code: 'bank_account.manage', name: '은행계좌 관리', group: '시스템/관리', description: '회사 은행계좌 등록/관리' },
+  { code: 'vendor.manage', name: '거래처 관리', group: '시스템/관리', description: '거래처 등록/관리' },
+  { code: 'role.manage', name: '권한 설정 관리', group: '시스템/관리', description: '역할별 권한 매트릭스 설정' },
+];
+
+export const ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
+  SUPER_ADMIN: PERMISSION_DEFINITIONS.map((p) => p.code),
+  ADMIN: PERMISSION_DEFINITIONS.map((p) => p.code),
+  COMPANY_ADMIN: PERMISSION_DEFINITIONS.map((p) => p.code),
+  ORG_ADMIN: PERMISSION_DEFINITIONS.map((p) => p.code),
+  ACCOUNTANT: [
+    'dashboard.view',
+    'transaction.view',
+    'transaction.create',
+    'transaction.update',
+    'transaction.confirm',
+    'transaction.cancel',
+    'bank_import.view',
+    'bank_import.create',
+    'budget.view',
+    'budget.create',
+    'budget.update',
+    'report.monthly',
+    'report.quarterly',
+    'report.annual',
+    'ledger.view',
+    'cashbook.view',
+    'user.view',
+    'team.view',
+    'account.manage',
+    'bank_account.manage',
+    'vendor.manage',
+  ],
+  HQ_ACCOUNTANT: [
+    'dashboard.view',
+    'transaction.view',
+    'transaction.create',
+    'transaction.update',
+    'transaction.confirm',
+    'transaction.cancel',
+    'bank_import.view',
+    'bank_import.create',
+    'budget.view',
+    'budget.create',
+    'budget.update',
+    'report.monthly',
+    'report.quarterly',
+    'report.annual',
+    'ledger.view',
+    'cashbook.view',
+    'user.view',
+    'team.view',
+    'account.manage',
+    'bank_account.manage',
+    'vendor.manage',
+  ],
+  TEAM_MANAGER: [
+    'dashboard.view',
+    'transaction.view',
+    'transaction.create',
+    'transaction.update',
+    'budget.view',
+    'budget.update',
+    'report.monthly',
+    'cashbook.view',
+    'team.view',
+    'user.view',
+  ],
+  MANAGER: [
+    'dashboard.view',
+    'transaction.view',
+    'transaction.create',
+    'transaction.update',
+    'budget.view',
+    'budget.update',
+    'report.monthly',
+    'cashbook.view',
+    'team.view',
+    'user.view',
+  ],
+  TEAM_ACCOUNTANT: [
+    'dashboard.view',
+    'transaction.view',
+    'transaction.create',
+    'budget.view',
+    'cashbook.view',
+    'team.view',
+  ],
+  VIEWER: [
+    'dashboard.view',
+    'transaction.view',
+    'budget.view',
+    'report.monthly',
+  ],
 };
 

@@ -114,40 +114,40 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       </div>
 
       {/* Report Controls (Tab + Month Selection) */}
-      <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+      <div className="bg-white rounded-xl p-3 sm:p-4 border border-slate-200 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto max-w-full">
           <button
             onClick={() => setReportType('MONTHLY')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+            className={`px-3 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${
               reportType === 'MONTHLY' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            월간 결산보고서
+            월간 결산
           </button>
           <button
             onClick={() => setReportType('QUARTERLY')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+            className={`px-3 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${
               reportType === 'QUARTERLY' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            분기 수지보고서
+            분기 수지
           </button>
           <button
             onClick={() => setReportType('ANNUAL')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+            className={`px-3 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${
               reportType === 'ANNUAL' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            연간 결산보고서
+            연간 결산
           </button>
         </div>
 
         {/* Date Selector */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 justify-end">
           <select
             value={selectedYear}
             onChange={(e) => setSelectedYear(Number(e.target.value))}
-            className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 font-semibold"
+            className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 font-semibold bg-white"
           >
             <option value={2026}>2026년</option>
             <option value={2025}>2025년</option>
@@ -157,7 +157,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(Number(e.target.value))}
-              className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 font-semibold"
+              className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 font-semibold bg-white"
             >
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
                 <option key={m} value={m}>
@@ -170,20 +170,20 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       </div>
 
       {/* Main Statement Paper */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 md:p-8 space-y-6">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-6 md:p-8 space-y-6">
         {/* Title Area */}
         <div className="text-center border-b border-slate-200 pb-6">
           <div className="text-xs font-bold text-indigo-700 tracking-wider uppercase mb-1">
             don don multi-tenant accounting statement
           </div>
-          <h2 className="text-2xl font-black text-slate-900">
+          <h2 className="text-xl sm:text-2xl font-black text-slate-900">
             {currentCompany.company_name} {selectedYear}년 {reportType === 'MONTHLY' ? `${selectedMonth}월 ` : ''}수지결산서
           </h2>
-          <div className="mt-2 text-xs text-slate-500 flex items-center justify-center gap-4">
+          <div className="mt-2 text-xs text-slate-500 flex flex-wrap items-center justify-center gap-2 sm:gap-4">
             <span>사업자등록번호: {currentCompany.business_number}</span>
-            <span>•</span>
+            <span className="hidden sm:inline">•</span>
             <span>대표자: {currentCompany.representative_name}</span>
-            <span>•</span>
+            <span className="hidden sm:inline">•</span>
             <span>기준통화: 대한민국 원 (KRW)</span>
           </div>
         </div>

@@ -22,20 +22,20 @@ import {
   Trash2,
 } from 'lucide-react';
 
-interface AdminUsersViewProps {
+export interface AdminUsersViewProps {
   users: User[];
   companies: Company[];
-  teams: Team[];
+  teams?: Team[];
   userRoles: UserCompanyRole[];
-  teamRoles: UserTeamRole[];
+  teamRoles?: UserTeamRole[];
   currentCompany: Company;
   currentUserId: string;
   onSwitchUser: (userId: string) => void;
   onAssignRole: (userId: string, companyId: string, role: RoleType) => Promise<void>;
-  onUpdateUserStatus: (userId: string, status: 'ACTIVE' | 'SUSPENDED' | 'PENDING') => Promise<void>;
-  onAssignTeamRole: (userId: string, teamId: string, companyId: string, role: RoleType) => Promise<void>;
-  onRemoveTeamRole: (id: string) => Promise<void>;
-  onUpdateCustomPermissions: (userCompanyRoleId: string, grant: PermissionCode[], revoke: PermissionCode[]) => Promise<void>;
+  onUpdateUserStatus?: (userId: string, status: 'ACTIVE' | 'SUSPENDED' | 'PENDING') => Promise<void>;
+  onAssignTeamRole?: (userId: string, teamId: string, companyId: string, role: RoleType) => Promise<void>;
+  onRemoveTeamRole?: (id: string) => Promise<void>;
+  onUpdateCustomPermissions?: (userCompanyRoleId: string, grant: PermissionCode[], revoke: PermissionCode[]) => Promise<void>;
 }
 
 const TEAM_SCOPED_ROLES: RoleType[] = ['TEAM_MANAGER', 'TEAM_ACCOUNTANT', 'VIEWER'];
@@ -43,9 +43,9 @@ const TEAM_SCOPED_ROLES: RoleType[] = ['TEAM_MANAGER', 'TEAM_ACCOUNTANT', 'VIEWE
 export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   users,
   companies,
-  teams,
+  teams = [],
   userRoles,
-  teamRoles,
+  teamRoles = [],
   currentCompany,
   currentUserId,
   onSwitchUser,
@@ -79,8 +79,11 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const pendingUsers = users.filter((u) => u.status === 'PENDING');
   const activeUsers = users.filter((u) => u.status !== 'PENDING');
 
-  const getRoleBadge = (role: RoleType) => {
-    const info = ROLE_DEFINITIONS[role as keyof typeof ROLE_DEFINITIONS];
+  const getRoleBadge = (role: string) => {
+    const normalized = role.replace(/^role_/, '').toUpperCase();
+    const info =
+      ROLE_DEFINITIONS[normalized as keyof typeof ROLE_DEFINITIONS] ||
+      ROLE_DEFINITIONS[role as keyof typeof ROLE_DEFINITIONS];
     if (!info) return <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded">{role}</span>;
     return (
       <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${info.color}`}>{info.name}</span>
@@ -103,7 +106,9 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const handleApprove = async (userId: string) => {
     try {
       setStatusUpdatingId(userId);
-      await onUpdateUserStatus(userId, 'ACTIVE');
+      if (onUpdateUserStatus) {
+        await onUpdateUserStatus(userId, 'ACTIVE');
+      }
     } catch (err: any) {
       alert(err.message || '승인 실패');
     } finally {
@@ -116,7 +121,9 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
     if (!confirm(next === 'SUSPENDED' ? `${u.name} 님의 이용을 정지할까요?` : `${u.name} 님의 이용 정지를 해제할까요?`)) return;
     try {
       setStatusUpdatingId(u.id);
-      await onUpdateUserStatus(u.id, next);
+      if (onUpdateUserStatus) {
+        await onUpdateUserStatus(u.id, next);
+      }
     } catch (err: any) {
       alert(err.message || '상태 변경 실패');
     } finally {
@@ -127,7 +134,9 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const handleAddTeamRole = async (userId: string) => {
     if (!newTeamId) return;
     try {
-      await onAssignTeamRole(userId, newTeamId, currentCompany.id, newTeamRole);
+      if (onAssignTeamRole) {
+        await onAssignTeamRole(userId, newTeamId, currentCompany.id, newTeamRole);
+      }
       setTeamAssignFor(null);
     } catch (err: any) {
       alert(err.message || '팀 권한 배정 실패');
@@ -167,7 +176,9 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
     if (!permEditRoleId) return;
     try {
       setSavingPerm(true);
-      await onUpdateCustomPermissions(permEditRoleId, Array.from(permDraft.grant), Array.from(permDraft.revoke));
+      if (onUpdateCustomPermissions) {
+        await onUpdateCustomPermissions(permEditRoleId, Array.from(permDraft.grant), Array.from(permDraft.revoke));
+      }
       setPermEditRoleId(null);
     } catch (err: any) {
       alert(err.message || '개별 권한 저장 실패');
@@ -425,7 +436,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                                 {getRoleBadge(tr.role_id)}
                               </div>
                               <button
-                                onClick={() => onRemoveTeamRole(tr.id)}
+                                onClick={() => onRemoveTeamRole && onRemoveTeamRole(tr.id)}
                                 className="text-slate-400 hover:text-rose-600"
                                 title="팀 권한 제거"
                               >

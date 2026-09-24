@@ -4,7 +4,35 @@
  */
 
 // Core Multi-Tenant Statuses
-export type EntityStatus = 'ACTIVE' | 'INACTIVE' | 'SUSPENDED';
+export type EntityStatus = 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'PENDING';
+
+// Permission Codes
+export type PermissionCode =
+  | 'dashboard.view'
+  | 'transaction.view'
+  | 'transaction.create'
+  | 'transaction.update'
+  | 'transaction.confirm'
+  | 'transaction.cancel'
+  | 'bank_import.view'
+  | 'bank_import.create'
+  | 'budget.view'
+  | 'budget.create'
+  | 'budget.update'
+  | 'report.monthly'
+  | 'report.quarterly'
+  | 'report.annual'
+  | 'ledger.view'
+  | 'cashbook.view'
+  | 'user.manage'
+  | 'user.view'
+  | 'company.manage'
+  | 'team.manage'
+  | 'team.view'
+  | 'account.manage'
+  | 'bank_account.manage'
+  | 'vendor.manage'
+  | 'role.manage';
 
 // 1. 회사 (companies) - 최상위 테넌트
 export interface Company {
@@ -80,6 +108,10 @@ export interface UserCompanyRole {
   company_id: string;
   role_id: string; // FK to roles
   status: EntityStatus;
+  custom_permissions?: {
+    grant: PermissionCode[];
+    revoke: PermissionCode[];
+  };
   created_at: string;
   updated_at: string;
 }
@@ -100,6 +132,7 @@ export interface UserTeamRole {
   id: string;
   user_id: string;
   team_id: string;
+  company_id?: string;
   role_id: string;
   created_at: string;
   updated_at: string;
@@ -292,7 +325,7 @@ export interface AuditLog {
   company_id: string;
   user_id: string;
   action: 'CREATE' | 'UPDATE' | 'DELETE' | 'CONFIRM' | 'CANCEL' | 'CLOSE_PERIOD' | 'IMPORT';
-  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE';
+  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR';
   entity_id: string;
   before_data?: any;
   after_data?: any;

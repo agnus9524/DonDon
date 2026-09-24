@@ -84,13 +84,84 @@ export const BudgetView: React.FC<BudgetViewProps> = ({
         </div>
       </div>
 
-      {/* Budget Table */}
+      {/* Budget Table & Cards */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-        <div className="p-4 border-b border-slate-100">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="text-sm font-bold text-slate-900">부서 및 계정별 예산 현황표</h2>
+          <span className="text-xs text-slate-400">총 {budgets.length}개 예산 과목</span>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Card List */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {budgets.length === 0 ? (
+            <div className="py-8 text-center text-slate-400 text-xs">
+              등록된 예산 항목이 없습니다.
+            </div>
+          ) : (
+            budgets.map((b) => {
+              const rate = b.execution_rate || 0;
+              const isExceeded = rate > 100;
+              const isWarning = rate >= 80 && rate <= 100;
+
+              return (
+                <div key={b.id} className="p-4 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-bold text-slate-900 text-sm">{b.account_name}</span>
+                      <span className="text-xs text-slate-500 ml-1.5 font-medium">({b.team_name})</span>
+                    </div>
+                    {isExceeded ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full font-bold">
+                        <AlertTriangle className="w-3 h-3" /> 초과
+                      </span>
+                    ) : isWarning ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full font-bold">
+                        주의
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">
+                        <CheckCircle className="w-3 h-3" /> 정상
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                    <div>
+                      <div className="text-[10px] text-slate-400">배정예산</div>
+                      <div className="font-mono font-bold text-slate-800 mt-0.5">{formatNumber(b.allocated_amount)}원</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">집행액</div>
+                      <div className="font-mono font-bold text-rose-600 mt-0.5">{formatNumber(b.spent_amount)}원</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">잔여예산</div>
+                      <div className="font-mono font-bold text-emerald-600 mt-0.5">{formatNumber(b.remaining_amount)}원</div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[11px] text-slate-500">
+                      <span>집행 진척도</span>
+                      <span className="font-mono font-bold">{rate}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          isExceeded ? 'bg-rose-500' : isWarning ? 'bg-amber-500' : 'bg-indigo-600'
+                        }`}
+                        style={{ width: `${Math.min(rate, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 uppercase font-semibold text-[11px]">
