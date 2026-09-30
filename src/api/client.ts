@@ -92,7 +92,7 @@ class ApiClient {
     localStorage.removeItem('dondon_current_company_id');
   }
 
-  async isLoggedIn(): Promise<boolean> {
+  isLoggedIn(): boolean {
     return localStorage.getItem('dondon_is_logged_in') === 'true';
   }
 

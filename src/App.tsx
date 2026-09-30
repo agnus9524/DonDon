@@ -79,6 +79,30 @@ export default function App() {
     await api.requestJoinCompany(companyId, reason);
   };
 
+  // Load domain data for a given company
+  const loadCompanyData = useCallback(async (companyId: string) => {
+    try {
+      const [txData, bankData, teamData, accData, budData, venData] = await Promise.all([
+        api.getTransactions(),
+        api.getBankAccounts(),
+        api.getTeams(),
+        api.getAccounts(),
+        api.getBudgets(2026),
+        api.getVendors(),
+      ]);
+
+      setTransactions(txData.transactions || []);
+      setBankAccounts(bankData || []);
+      setTeams(teamData || []);
+      setAccounts(accData || []);
+      setBudgets(budData || []);
+      setVendors(venData || []);
+    } catch (err: any) {
+      console.error('Company data load error:', err);
+      setErrorMessage(err.message || '회사 데이터를 조회하지 못했습니다.');
+    }
+  }, []);
+
   // Initialize and load user & tenant auth
   const loadInitialData = useCallback(async () => {
     try {

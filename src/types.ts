@@ -324,8 +324,8 @@ export interface AuditLog {
   id: string;
   company_id: string;
   user_id: string;
-  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'CONFIRM' | 'CANCEL' | 'CLOSE_PERIOD' | 'IMPORT';
-  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR';
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'CONFIRM' | 'CANCEL' | 'CLOSE_PERIOD' | 'IMPORT' | 'LOGIN';
+  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR' | 'AUTH' | 'USER_COMPANY_ROLE_REQUEST';
   entity_id: string;
   before_data?: any;
   after_data?: any;
