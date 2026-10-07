@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Company, User } from '../types';
+import { Company, User, CompanyLicenseInfo } from '../types';
 import { ROLE_DEFINITIONS } from '../data/initialData';
 import {
   Building2,
@@ -12,7 +12,7 @@ import {
   Check,
   Plus,
   Shield,
-  User as UserIcon,
+  KeyRound,
   RefreshCw,
   LogOut,
   Sliders,
@@ -24,10 +24,12 @@ interface TopNavbarProps {
   currentCompany: Company | null;
   companies: (Company & { my_role?: string })[];
   currentUser: User;
-  allUsers: User[];
+  isSuperAdmin: boolean;
   currentRole: string;
+  // 현재 회사의 라이선스 요약 (최고관리자에게는 표시하지 않음)
+  license?: CompanyLicenseInfo | null;
+  onOpenRenewLicense?: () => void;
   onSelectCompany: (companyId: string) => void;
-  onSelectUser: (userId: string) => void;
   onOpenNewCompanyModal: () => void;
   onOpenCompanySelector: () => void;
   onRefresh: () => void;
@@ -40,10 +42,11 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   currentCompany,
   companies,
   currentUser,
-  allUsers,
+  isSuperAdmin,
   currentRole,
+  license,
+  onOpenRenewLicense,
   onSelectCompany,
-  onSelectUser,
   onOpenNewCompanyModal,
   onOpenCompanySelector,
   onRefresh,
@@ -70,6 +73,11 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const daysLeft =
+    license?.expires_at && license.state === 'active'
+      ? Math.max(0, Math.ceil((new Date(license.expires_at).getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
+      : null;
+
   const roleKey = (currentRole || 'VIEWER') as keyof typeof ROLE_DEFINITIONS;
   const roleInfo = ROLE_DEFINITIONS[roleKey] || ROLE_DEFINITIONS.VIEWER;
 
@@ -94,13 +102,13 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           </div>
           <div className="hidden xs:block">
             <div className="flex items-center gap-1.5 leading-none">
-              <span className="font-bold text-slate-900 tracking-tight text-base">don don</span>
+              <span className="font-bold text-slate-900 tracking-tight text-base">돈돈</span>
               <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200/60 px-1.5 py-0.5 rounded hidden sm:inline">
                 Multi-Tenant
               </span>
             </div>
             <span className="text-[11px] text-slate-600 font-medium hidden sm:inline">
-              통합 회계관리
+              회계관리 프로그램
             </span>
           </div>
         </div>
@@ -172,7 +180,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                   <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
                   전체 회사 선택 화면 열기
                 </button>
-                {(currentUser.is_super_admin || currentUser.email === 'agnus9524@gmail.com') && (
+                {isSuperAdmin && (
                   <button
                     onClick={() => {
                       setCompanyDropdownOpen(false);
@@ -224,7 +232,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
             <div className="text-left hidden sm:block">
               <div className="text-xs font-semibold text-slate-900 leading-tight flex items-center gap-1.5">
                 <span>{currentUser.name} 님</span>
-                {(currentUser.is_super_admin || currentUser.email === 'agnus9524@gmail.com') && (
+                {isSuperAdmin && (
                   <span className="text-[9px] bg-amber-400 text-slate-950 font-black px-1.5 py-0.5 rounded leading-none">
                     최고관리자
                   </span>
@@ -242,7 +250,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
               <div className="px-3 py-1.5 border-b border-slate-100">
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-bold text-slate-900">{currentUser.name}</div>
-                  {(currentUser.is_super_admin || currentUser.email === 'agnus9524@gmail.com') && (
+                  {isSuperAdmin && (
                     <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-1.5 py-0.5 rounded border border-amber-200">
                       최고관리자 (Super Admin)
                     </span>
@@ -254,44 +262,30 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                 </div>
               </div>
 
-              <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mt-1">
-                사용자 전환 (멀티 권한 테스트)
-              </div>
-
-              <div className="py-1 max-h-56 overflow-y-auto">
-                {allUsers.map((u) => {
-                  const isCur = u.id === currentUser.id;
-                  const isSuper = u.is_super_admin || u.email === 'agnus9524@gmail.com';
-                  return (
+              {!isSuperAdmin && license && (
+                <div className="px-3 py-2.5 border-b border-slate-100 space-y-1.5">
+                  <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">라이선스</div>
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-600">사용 기한</span>
+                    <span className={`font-bold ${daysLeft !== null && daysLeft <= 7 ? 'text-rose-600' : 'text-slate-900'}`}>
+                      {license.expires_at ? new Date(license.expires_at).toLocaleDateString('ko-KR') : '-'}
+                      {daysLeft !== null && ` (${daysLeft}일 남음)`}
+                    </span>
+                  </div>
+                  {license.is_owner && onOpenRenewLicense && (
                     <button
-                      key={u.id}
                       onClick={() => {
-                        onSelectUser(u.id);
                         setUserDropdownOpen(false);
+                        onOpenRenewLicense();
                       }}
-                      className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-slate-50 transition-colors ${
-                        isCur ? 'bg-indigo-50/70 font-semibold text-indigo-900' : 'text-slate-700'
-                      }`}
+                      className="w-full py-1.5 px-3 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <UserIcon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <div className="min-w-0 truncate">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-semibold text-slate-900">{u.name}</span>
-                            {isSuper && (
-                              <span className="text-[9px] bg-amber-400 text-slate-950 font-bold px-1 rounded">
-                                최고관리자
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] text-slate-400 font-mono truncate">{u.email}</div>
-                        </div>
-                      </div>
-                      {isCur && <Check className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
+                      <KeyRound className="w-3.5 h-3.5" />
+                      <span>인증키로 기간 연장</span>
                     </button>
-                  );
-                })}
-              </div>
+                  )}
+                </div>
+              )}
 
               {onLogout && (
                 <div className="pt-2 mt-1 border-t border-slate-100 px-3 pb-1">

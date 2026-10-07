@@ -30,7 +30,7 @@ export interface AdminUsersViewProps {
   teamRoles?: UserTeamRole[];
   currentCompany: Company;
   currentUserId: string;
-  onSwitchUser: (userId: string) => void;
+  onSwitchUser?: (userId: string) => void; // (사용 안 함) 체험용 사용자 전환은 제거됨
   onAssignRole: (userId: string, companyId: string, role: RoleType) => Promise<void>;
   onUpdateUserStatus?: (userId: string, status: 'ACTIVE' | 'SUSPENDED' | 'PENDING') => Promise<void>;
   onAssignTeamRole?: (userId: string, teamId: string, companyId: string, role: RoleType) => Promise<void>;
@@ -48,7 +48,6 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   teamRoles = [],
   currentCompany,
   currentUserId,
-  onSwitchUser,
   onAssignRole,
   onUpdateUserStatus,
   onAssignTeamRole,
@@ -406,15 +405,6 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                         <Ban className="w-3.5 h-3.5" />
                         <span>{isSuspended ? '정지 해제' : '이용 정지'}</span>
                       </button>
-                      {!isCurrentUser && (
-                        <button
-                          onClick={() => onSwitchUser(u.id)}
-                          className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-1 transition-colors"
-                        >
-                          <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
-                          <span>이 사용자로 전환</span>
-                        </button>
-                      )}
                       <button
                         onClick={() => setExpandedUserId(isExpanded ? null : u.id)}
                         className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1"

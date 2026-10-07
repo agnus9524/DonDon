@@ -27,6 +27,7 @@ import {
   ChevronDown,
   ChevronRight,
   UserCog,
+  KeyRound,
 } from 'lucide-react';
 
 export type NavSection =
@@ -35,6 +36,7 @@ export type NavSection =
   | 'budgets'
   | 'banks'
   | 'reports'
+  | 'admin-super'
   | 'admin-companies'
   | 'admin-accounting-settings'
   | 'admin-accounting-accounts'
@@ -107,6 +109,7 @@ const ADMIN_ITEMS: {
   highlight?: boolean;
   hasChildren?: boolean;
 }[] = [
+  { id: 'admin-super', label: '슈퍼 관리자 패널', icon: KeyRound, permission: 'company.manage', highlight: true },
   { id: 'admin-companies', label: '회사 관리 (법인)', icon: Building2, permission: 'company.manage', highlight: true },
   { id: 'admin-accounting-settings', label: '회계설정', icon: SlidersHorizontal, permission: 'account.manage', hasChildren: true },
   { id: 'admin-user-settings', label: '사용자설정', icon: UserCog, permission: 'user.view', hasChildren: true },
@@ -130,8 +133,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const visibleNavItems = NAV_ITEMS.filter((item) => hasPermission(item.permission));
   const visibleAdminItems = ADMIN_ITEMS.filter((item) => {
-    // 회사 관리(법인)는 최고관리자만 권한이 있고 메뉴가 보임
-    if (item.id === 'admin-companies') {
+    // 슈퍼 관리자 패널(라이선스·인증키)과 회사 관리(법인)는 최고관리자에게만 보임
+    if (item.id === 'admin-super' || item.id === 'admin-companies') {
       return isSuperAdmin;
     }
     return hasPermission(item.permission);

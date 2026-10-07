@@ -4,7 +4,8 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { api } from './api/client';
+import { api, setUnauthorizedHandler } from './api/client';
+import { isFirebaseConfigured, loginDev, loginWithGoogle, logout, watchSession } from './services/authSession';
 import {
   Company,
   User,
@@ -18,6 +19,9 @@ import {
   PermissionCode,
   RoleType,
   JoinRequest,
+  AuthConfig,
+  MeResponse,
+  PendingJoinInfo,
 } from './types';
 import { PERMISSION_DEFINITIONS, ROLE_PERMISSIONS } from './data/initialData';
 import { TopNavbar } from './components/TopNavbar';
@@ -38,14 +42,25 @@ import { AdminVendorsView } from './components/AdminVendorsView';
 import { AdminPermissionsView } from './components/AdminPermissionsView';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { LoginView } from './components/LoginView';
-import { AlertCircle, RefreshCw, Lock } from 'lucide-react';
+import { OnboardingView, LicenseBlockedView, RenewLicenseModal } from './components/LicenseGateView';
+import { SuperAdminView } from './components/SuperAdminView';
+import { AlertCircle, Lock, KeyRound } from 'lucide-react';
+
+type MyCompany = MeResponse['companies'][number];
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(api.isLoggedIn());
+  // 로그인 세션 (Firebase Google 로그인) — sessionReady 전에는 로그인 여부를 아직 모른다
+  const [sessionReady, setSessionReady] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState<PendingJoinInfo[]>([]);
+  const [isRenewOpen, setIsRenewOpen] = useState(false);
+
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [currentCompany, setCurrentCompany] = useState<Company | null>(null);
-  const [userCompanies, setUserCompanies] = useState<(Company & { my_role?: string })[]>([]);
+  const [userCompanies, setUserCompanies] = useState<MyCompany[]>([]);
   const [allCompanies, setAllCompanies] = useState<Company[]>([]);
   const [currentRole, setCurrentRole] = useState<string>('VIEWER');
   const [allUserRoles, setAllUserRoles] = useState<UserCompanyRole[]>([]);
@@ -70,45 +85,9 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleLogin = async (emailOrId: string) => {
-    setIsLoading(true);
-    try {
-      const loginData = await api.login(emailOrId);
-      if (loginData.user) {
-        setCurrentUser(loginData.user);
-        const comp = loginData.companies?.[0];
-        if (comp) {
-          api.setCompany(comp.id);
-          setCurrentCompany(comp);
-          setCurrentRole(comp.my_role || (loginData.is_super_admin ? 'SUPER_ADMIN' : 'VIEWER'));
-        }
-      }
-      setIsLoggedIn(true);
-      setIsCompanySelectorOpen(false);
-      setCurrentSection('dashboard');
-      await loadInitialData();
-    } catch (err: any) {
-      console.error('Login error:', err);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleLogout = () => {
-    api.logout();
-    setIsLoggedIn(false);
-    setCurrentUser(null);
-    setCurrentCompany(null);
-  };
-
-  const handleRequestJoinCompany = async (payload: {
-    company_id: string;
-    reason: string;
-    name: string;
-    email: string;
-  }) => {
-    await api.requestJoinCompany(payload);
+  const handleLogout = async () => {
+    api.clearCompany();
+    await logout();
   };
 
   const handleApproveJoinRequest = async (requestId: string, roleId: string) => {
@@ -169,74 +148,133 @@ export default function App() {
       setIsLoading(true);
       setErrorMessage(null);
 
-      // 1. Fetch current authenticated user & their company list
+      // 1. 내 정보 + 내 회사 목록(라이선스 상태 포함)
       const meData = await api.getMe();
       setCurrentUser(meData.user);
+      setIsSuperAdmin(meData.is_super_admin);
       setUserCompanies(meData.companies);
+      setPendingRequests(meData.pending_requests);
 
-      // 2. Fetch all users and all companies (for super admin switcher & management)
+      // 소속 회사가 없는 일반 사용자 → 인증키 입력 / 가입 신청 화면
+      if (!meData.is_super_admin && meData.companies.length === 0) {
+        api.clearCompany();
+        setCurrentCompany(null);
+        return;
+      }
+
+      // 2. 사용할 회사 결정: 저장된 회사 → 라이선스가 유효한 첫 회사 → 그 외
+      const isUsable = (c: MyCompany) => meData.is_super_admin || c.license.state === 'active';
+      const savedCompanyId = api.getCompanyId();
+      const targetCompany =
+        meData.companies.find((c) => c.id === savedCompanyId && isUsable(c)) ||
+        meData.companies.find(isUsable) ||
+        meData.companies.find((c) => c.id === savedCompanyId) ||
+        meData.companies[0];
+
+      if (!targetCompany) {
+        // 최고관리자인데 아직 등록된 회사가 하나도 없는 경우 → 슈퍼 관리자 패널로
+        api.clearCompany();
+        setCurrentCompany(null);
+        setCurrentRole('SUPER_ADMIN');
+        setAllCompanies([]);
+        setCurrentSection('admin-super');
+        return;
+      }
+
+      api.setCompany(targetCompany.id);
+      setCurrentCompany(targetCompany);
+      setCurrentRole(targetCompany.my_role || (meData.is_super_admin ? 'SUPER_ADMIN' : 'VIEWER'));
+
+      // 라이선스가 만료·중지된 회사는 자료를 불러오지 않는다 (안내 화면으로 대체)
+      if (!isUsable(targetCompany)) return;
+
+      // 3. 사용자·권한 정보 (서버가 내 회사 범위로 제한해서 내려줌)
       const adminData = await api.getAdminUsersAndRoles();
       setAllUsers(adminData.users);
       setAllCompanies(adminData.companies);
       setAllUserRoles(adminData.roles);
-      if (adminData.team_roles) {
-        setTeamRoles(adminData.team_roles);
-      }
+      setTeamRoles(adminData.team_roles || []);
 
-      // 2-1. Fetch join requests
       try {
-        const reqs = await api.getJoinRequests();
-        setJoinRequests(reqs);
+        setJoinRequests(await api.getJoinRequests());
       } catch {
         setJoinRequests([]);
       }
 
-      // 3. Resolve active company:
-      const savedCompanyId = api.getCompanyId();
-      let targetCompany = meData.companies.find((c) => c.id === savedCompanyId);
-
-      // If user is super admin, they can access any company in allCompanies
-      if (!targetCompany && meData.user.is_super_admin) {
-        targetCompany = adminData.companies.find((c) => c.id === savedCompanyId) as any;
-      }
-
-      // Default fallback
-      if (!targetCompany) {
-        targetCompany = meData.companies[0] || adminData.companies[0];
-      }
-
-      if (targetCompany) {
-        api.setCompany(targetCompany.id);
-        setCurrentCompany(targetCompany);
-        const role = targetCompany.my_role || (meData.user.is_super_admin ? 'SUPER_ADMIN' : 'VIEWER');
-        setCurrentRole(role);
-
-        // Load company-specific scoped domain data
-        await loadCompanyData(targetCompany.id);
-      } else {
-        setIsCompanySelectorOpen(true);
-      }
+      // 4. 회사 자료
+      await loadCompanyData(targetCompany.id);
     } catch (err: any) {
       console.error('Initial load error:', err);
       setErrorMessage(err.message || '데이터를 불러오는 중 오류가 발생했습니다.');
     } finally {
       setIsLoading(false);
     }
+  }, [loadCompanyData]);
+
+  // 로그인 세션 감시 + 로그인 화면 설정 불러오기
+  useEffect(() => {
+    api
+      .getAuthConfig()
+      .then(setAuthConfig)
+      .catch(() => setAuthConfig({ firebase_configured: false, dev_login: false }));
+    setUnauthorizedHandler(() => {
+      logout();
+    });
+    const unsubscribe = watchSession((signedIn) => {
+      setIsLoggedIn(signedIn);
+      setSessionReady(true);
+    });
+    return () => {
+      unsubscribe();
+      setUnauthorizedHandler(null);
+    };
   }, []);
 
   useEffect(() => {
+    if (!sessionReady) return;
     if (isLoggedIn) {
       loadInitialData();
     } else {
-      fetch('/api/v1/companies')
-        .then((res) => res.json())
-        .then((data) => {
-          if (data && data.companies) setAllCompanies(data.companies);
-        })
-        .catch(() => {});
+      // 로그아웃: 화면에 남아 있는 이전 사용자의 자료를 모두 비운다
+      setCurrentUser(null);
+      setIsSuperAdmin(false);
+      setCurrentCompany(null);
+      setUserCompanies([]);
+      setAllCompanies([]);
+      setAllUsers([]);
+      setAllUserRoles([]);
+      setTeamRoles([]);
+      setJoinRequests([]);
+      setPendingRequests([]);
+      setTransactions([]);
+      setBankAccounts([]);
+      setTeams([]);
+      setAccounts([]);
+      setBudgets([]);
+      setVendors([]);
+      setErrorMessage(null);
+      setCurrentSection('dashboard');
       setIsLoading(false);
     }
-  }, [isLoggedIn, loadInitialData]);
+  }, [sessionReady, isLoggedIn, loadInitialData]);
+
+  // 인증키 인증: 회사 등록(처음) 또는 기간 연장(대표 관리자)
+  const handleActivateLicense = async (payload: {
+    key: string;
+    company_name?: string;
+    business_number?: string;
+    representative_name?: string;
+  }) => {
+    const result = await api.activateLicense(payload);
+    api.setCompany(result.company.id);
+    await loadInitialData();
+  };
+
+  const handleRequestJoinCompany = async (payload: { company_code: string; reason: string }) => {
+    await api.requestJoinCompany(payload);
+    const meData = await api.getMe();
+    setPendingRequests(meData.pending_requests);
+  };
 
   // Handler: Switch company
   const handleSelectCompany = async (companyId: string) => {
@@ -252,28 +290,18 @@ export default function App() {
 
       if (found) {
         setCurrentCompany(found);
-        const myRole = (found as any).my_role || (currentUser?.is_super_admin ? 'SUPER_ADMIN' : 'VIEWER');
+        const myRole = (found as any).my_role || (isSuperAdmin ? 'SUPER_ADMIN' : 'VIEWER');
         setCurrentRole(myRole);
       }
 
       setIsCompanySelectorOpen(false);
+      // 라이선스가 유효하지 않은 회사는 안내 화면만 보여 주고 자료는 불러오지 않는다
+      const mine = userCompanies.find((c) => c.id === companyId);
+      if (!isSuperAdmin && mine && mine.license.state !== 'active') return;
       await loadCompanyData(companyId);
+      if (currentSection === 'admin-super' && !isSuperAdmin) setCurrentSection('dashboard');
     } catch (err: any) {
       setErrorMessage(err.message || '회사 전환에 실패했습니다.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Handler: Switch user session (Persona testing)
-  const handleSwitchUser = async (userId: string) => {
-    setIsLoading(true);
-    setErrorMessage(null);
-    try {
-      api.setUser(userId);
-      await loadInitialData();
-    } catch (err: any) {
-      setErrorMessage(err.message || '사용자 전환 실패');
     } finally {
       setIsLoading(false);
     }
@@ -348,10 +376,9 @@ export default function App() {
   // Handler: Create company
   const handleCreateCompany = async (payload: Partial<Company>) => {
     const newComp = await api.createCompany(payload);
-    setAllCompanies((prev) => [...prev, newComp]);
-    setUserCompanies((prev) => [...prev, { ...newComp, my_role: 'ADMIN' }]);
-    // Switch to the new company
-    await handleSelectCompany(newComp.id);
+    // 새 회사로 전환한 뒤 목록을 다시 불러온다
+    api.setCompany(newComp.id);
+    await loadInitialData();
   };
 
   // Handler: Delete company
@@ -366,8 +393,9 @@ export default function App() {
       if (remaining.length > 0) {
         await handleSelectCompany(remaining[0].id);
       } else {
+        api.clearCompany();
         setCurrentCompany(null);
-        setIsCompanySelectorOpen(true);
+        setCurrentSection('admin-super');
       }
     }
   };
@@ -416,7 +444,10 @@ export default function App() {
     setVendors((prev) => [...prev, newVendor]);
   };
 
-  const isSuperAdmin = currentUser ? (currentUser.is_super_admin === true || currentUser.email === 'agnus9524@gmail.com') : false;
+  // 현재 회사의 내 라이선스 상태
+  const currentMyCompany = userCompanies.find((c) => c.id === currentCompany?.id);
+  const needsOnboarding = !!currentUser && !isSuperAdmin && userCompanies.length === 0;
+  const licenseBlocked = !isSuperAdmin && !!currentMyCompany && currentMyCompany.license.state !== 'active';
 
   const currentUserRoleRecord = allUserRoles.find(
     (r) => r.user_id === currentUser?.id && r.company_id === currentCompany?.id
@@ -444,22 +475,74 @@ export default function App() {
     });
   }, [allCompanies, allUserRoles]);
 
+  const loadingScreen = (text: string) => (
+    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white">
+      <div className="w-10 h-10 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mb-3" />
+      <p className="text-sm font-bold text-slate-200">{text}</p>
+    </div>
+  );
+
+  if (!sessionReady) {
+    return loadingScreen('로그인 상태를 확인하는 중입니다...');
+  }
+
   if (!isLoggedIn) {
     return (
       <LoginView
-        onLogin={handleLogin}
-        companies={allCompanies.length > 0 ? allCompanies : []}
-        onRequestJoinCompany={handleRequestJoinCompany}
+        authConfig={authConfig}
+        isFirebaseConfigured={isFirebaseConfigured}
+        onGoogleLogin={loginWithGoogle}
+        onDevLogin={loginDev}
       />
     );
   }
 
   if (!currentUser) {
+    // 로그인은 됐지만 서버에서 내 정보를 받지 못한 경우: 원인을 보여 주고 빠져나갈 수 있게 한다
+    if (errorMessage && !isLoading) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center gap-4">
+          <AlertCircle className="w-10 h-10 text-rose-400" />
+          <p className="text-sm font-bold text-slate-100 max-w-md">{errorMessage}</p>
+          <div className="flex gap-2">
+            <button onClick={() => loadInitialData()} className="px-4 py-2 rounded-xl bg-white text-slate-900 text-sm font-bold">
+              다시 시도
+            </button>
+            <button onClick={handleLogout} className="px-4 py-2 rounded-xl bg-white/10 text-white text-sm font-bold">
+              로그아웃
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return loadingScreen('메인 화면으로 이동 중입니다...');
+  }
+
+  if (needsOnboarding) {
     return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white">
-        <div className="w-10 h-10 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mb-3" />
-        <p className="text-sm font-bold text-slate-200">메인 화면으로 이동 중입니다...</p>
-      </div>
+      <OnboardingView
+        user={currentUser}
+        pendingRequests={pendingRequests}
+        onActivate={handleActivateLicense}
+        onRequestJoin={handleRequestJoinCompany}
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  if (licenseBlocked && currentMyCompany) {
+    return (
+      <LicenseBlockedView
+        user={currentUser}
+        company={currentMyCompany}
+        otherCompanies={userCompanies.filter((c) => c.id !== currentMyCompany.id)}
+        onRenew={(key) => handleActivateLicense({ key })}
+        onSelectCompany={async (companyId) => {
+          api.setCompany(companyId);
+          await loadInitialData();
+        }}
+        onLogout={handleLogout}
+      />
     );
   }
 
@@ -470,10 +553,11 @@ export default function App() {
         currentCompany={currentCompany}
         companies={userCompanies.length > 0 ? userCompanies : (enrichedCompanies as any)}
         currentUser={currentUser}
-        allUsers={allUsers}
+        isSuperAdmin={isSuperAdmin}
         currentRole={currentRole}
+        license={currentMyCompany?.license || null}
+        onOpenRenewLicense={() => setIsRenewOpen(true)}
         onSelectCompany={handleSelectCompany}
-        onSelectUser={handleSwitchUser}
         onOpenNewCompanyModal={() => setCurrentSection('admin-companies')}
         onOpenCompanySelector={() => setIsCompanySelectorOpen(true)}
         onRefresh={() => currentCompany && loadCompanyData(currentCompany.id)}
@@ -512,6 +596,28 @@ export default function App() {
                 className="text-rose-700 font-bold underline"
               >
                 다시 시도
+              </button>
+            </div>
+          )}
+
+          {/* 슈퍼 관리자 패널: 회사 선택과 무관하게 최고관리자에게만 열린다 */}
+          {currentSection === 'admin-super' && isSuperAdmin && <SuperAdminView />}
+
+          {!currentCompany && isSuperAdmin && currentSection !== 'admin-super' && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center max-w-lg mx-auto my-12 shadow-sm">
+              <div className="w-14 h-14 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <KeyRound className="w-7 h-7" />
+              </div>
+              <h2 className="text-lg font-black text-slate-900 mb-2">아직 등록된 회사가 없습니다</h2>
+              <p className="text-xs text-slate-600 mb-6 leading-relaxed">
+                슈퍼 관리자 패널에서 인증키를 발급해 회사 대표에게 전달하세요.<br />
+                대표가 인증키로 인증하면 회사가 등록됩니다.
+              </p>
+              <button
+                onClick={() => setCurrentSection('admin-super')}
+                className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                슈퍼 관리자 패널 열기
               </button>
             </div>
           )}
@@ -677,7 +783,7 @@ export default function App() {
                   userRoles={allUserRoles}
                   teamRoles={teamRoles}
                   currentUserId={currentUser.id}
-                  onSwitchUser={handleSwitchUser}
+                  onSwitchUser={() => {}}
                   onAssignRole={handleAssignRole}
                   onUpdateUserStatus={handleUpdateUserStatus}
                   onAssignTeamRole={handleAssignTeamRole}
@@ -708,6 +814,15 @@ export default function App() {
         }}
         onOpenAllMenu={() => setIsMobileMenuOpen(true)}
         isSuperAdmin={isSuperAdmin}
+      />
+
+      {/* 대표 관리자: 사용 중 인증키로 기간 연장 */}
+      <RenewLicenseModal
+        isOpen={isRenewOpen}
+        onClose={() => setIsRenewOpen(false)}
+        companyName={currentCompany?.company_name || ''}
+        expiresAt={currentMyCompany?.license.expires_at || null}
+        onRenew={(key) => handleActivateLicense({ key })}
       />
 
       {/* Company Selector Modal (Prompt Requirement) */}

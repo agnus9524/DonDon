@@ -343,8 +343,8 @@ export interface AuditLog {
   id: string;
   company_id: string;
   user_id: string;
-  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'CONFIRM' | 'CANCEL' | 'CLOSE_PERIOD' | 'IMPORT' | 'LOGIN' | 'APPROVE' | 'SUSPEND';
-  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR' | 'AUTH' | 'USER_COMPANY_ROLE_REQUEST' | 'USER_STATUS' | 'USER';
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'CONFIRM' | 'CANCEL' | 'CLOSE_PERIOD' | 'IMPORT' | 'LOGIN' | 'APPROVE' | 'SUSPEND' | 'ACTIVATE';
+  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR' | 'AUTH' | 'USER_COMPANY_ROLE_REQUEST' | 'USER_STATUS' | 'USER' | 'LICENSE' | 'AUTH_KEY';
   entity_id: string;
   before_data?: any;
   after_data?: any;
@@ -433,3 +433,73 @@ export interface CompanyCodeItem {
   updated_at: string;
 }
 
+
+// ────────────────────────────────────────────────────────────────
+// 라이선스 / 인증키 (최고관리자 발급 → 회사 대표 관리자 인증)
+// ────────────────────────────────────────────────────────────────
+
+// 라이선스 계산 상태: none(없음) / active(정상) / suspended(관리자 중지) / expired(기간 만료)
+export type LicenseState = 'none' | 'active' | 'suspended' | 'expired';
+
+// 회사 라이선스 — 인증키로 인증한 대표 관리자(user_id)와 그 회사(company_id)에 귀속
+export interface License {
+  id: string;
+  user_id: string; // 대표 관리자 (라이선스 소유 계정)
+  email: string;
+  company_id: string;
+  status: 'active' | 'suspended';
+  expires_at: string;
+  key: string; // 마지막으로 적용한 인증키
+  created_at: string;
+  updated_at: string;
+}
+
+// 인증키 — 최고관리자가 발급, 1회용 (한 번 쓰이면 그 계정에 귀속)
+export interface AuthKey {
+  id: string; // 키 문자열 XXXX-XXXX-XXXX-XXXX
+  status: 'unused' | 'used';
+  duration_days: number;
+  memo?: string;
+  created_at: string;
+  created_by: string;
+  used_by?: string;
+  used_by_email?: string;
+  used_at?: string;
+  company_id?: string;
+}
+
+// 최고관리자 패널용 조회 모델
+export interface LicenseRow extends License {
+  state: LicenseState;
+  user_name: string;
+  company_name: string;
+  company_code: string;
+  member_count: number;
+}
+
+// 회사 목록에 붙는 내 라이선스 요약
+export interface CompanyLicenseInfo {
+  state: LicenseState;
+  expires_at: string | null;
+  is_owner: boolean;
+}
+
+export interface AuthConfig {
+  firebase_configured: boolean;
+  dev_login: boolean;
+}
+
+export interface PendingJoinInfo {
+  id: string;
+  company_name: string;
+  company_code: string;
+  created_at: string;
+}
+
+export interface MeResponse {
+  user: User;
+  is_super_admin: boolean;
+  roles: UserCompanyRole[];
+  companies: (Company & { my_role: string; license: CompanyLicenseInfo })[];
+  pending_requests: PendingJoinInfo[];
+}

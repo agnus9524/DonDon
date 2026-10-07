@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import 'dotenv/config'; // .env 파일의 설정(SUPER_ADMIN_EMAIL 등)을 읽는다
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import crypto from 'crypto';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import {
   INITIAL_COMPANIES,
@@ -27,7 +29,6 @@ import {
   INITIAL_BANK_IMPORTS,
   INITIAL_BANK_IMPORT_ROWS,
   INITIAL_AUDIT_LOGS,
-  CURRENT_USER,
 } from './src/data/initialData';
 import {
   Company,
@@ -49,9 +50,133 @@ import {
   BankImport,
   BankImportRow,
   AuditLog,
+  License,
+  AuthKey,
+  LicenseState,
 } from './src/types';
 
-// 18-Table In-Memory Multi-Tenant Database Store
+// ────────────────────────────────────────────────────────────────
+// 운영 설정
+// ────────────────────────────────────────────────────────────────
+
+// 최고관리자: 이 Google 계정으로 로그인하면 시스템 최고관리자 권한을 가진다.
+const SUPER_ADMIN_EMAIL = (process.env.SUPER_ADMIN_EMAIL || 'agnus9524@gmail.com').trim().toLowerCase();
+
+// 데이터 저장 파일 (서버를 껐다 켜도 회사·라이선스·전표가 유지되도록 JSON으로 저장)
+const DATA_FILE = process.env.DONDON_DATA_FILE || path.join(process.cwd(), 'data', 'dondon-db.json');
+
+// Firebase 프로젝트 ID — 돈돈 전용 Firebase 설정 파일(firebase-applet-config.json)에서 읽는다.
+function readFirebaseProjectId(): string {
+  const fromEnv = (process.env.FIREBASE_PROJECT_ID || '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const raw = fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf-8');
+    const projectId = String(JSON.parse(raw).projectId || '').trim();
+    if (projectId && !projectId.startsWith('YOUR_')) return projectId;
+  } catch {
+    // 설정 파일이 없으면 미설정 상태로 둔다.
+  }
+  return '';
+}
+const FIREBASE_PROJECT_ID = readFirebaseProjectId();
+
+// 개발용 로그인: Firebase 설정 전에 로컬에서만 화면을 확인하기 위한 스위치.
+// 운영(production)에서는 절대 켜지지 않는다.
+const DEV_LOGIN_ENABLED = process.env.DONDON_DEV_LOGIN === 'true' && process.env.NODE_ENV !== 'production';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const nowIso = () => new Date().toISOString();
+const randomSuffix = () => crypto.randomBytes(3).toString('hex');
+
+// ────────────────────────────────────────────────────────────────
+// Firebase ID 토큰 검증 (Google 공개키로 서명 확인 — 추가 패키지 불필요)
+// ────────────────────────────────────────────────────────────────
+
+interface VerifiedIdentity {
+  uid: string;
+  email: string;
+  name?: string;
+  picture?: string;
+}
+
+const FIREBASE_JWKS_URL =
+  'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
+let jwksCache: { keys: Map<string, crypto.KeyObject>; expiresAt: number } | null = null;
+
+async function getFirebasePublicKey(kid: string): Promise<crypto.KeyObject | undefined> {
+  if (!jwksCache || jwksCache.expiresAt < Date.now() || !jwksCache.keys.has(kid)) {
+    const resp = await fetch(FIREBASE_JWKS_URL);
+    if (!resp.ok) throw new Error('Google 공개키를 가져오지 못했습니다.');
+    const body = (await resp.json()) as { keys: any[] };
+    const keys = new Map<string, crypto.KeyObject>();
+    for (const jwk of body.keys || []) {
+      keys.set(jwk.kid, crypto.createPublicKey({ key: jwk, format: 'jwk' }));
+    }
+    const maxAge = /max-age=(\d+)/.exec(resp.headers.get('cache-control') || '');
+    const ttlSec = maxAge ? Number(maxAge[1]) : 3600;
+    jwksCache = { keys, expiresAt: Date.now() + ttlSec * 1000 };
+  }
+  return jwksCache.keys.get(kid);
+}
+
+async function verifyFirebaseIdToken(token: string): Promise<VerifiedIdentity> {
+  if (!FIREBASE_PROJECT_ID) throw new Error('Firebase가 아직 설정되지 않았습니다.');
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('토큰 형식이 올바르지 않습니다.');
+
+  const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf-8'));
+  const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+  if (header.alg !== 'RS256' || !header.kid) throw new Error('지원하지 않는 토큰입니다.');
+
+  const publicKey = await getFirebasePublicKey(header.kid);
+  if (!publicKey) throw new Error('토큰 서명 키를 찾을 수 없습니다.');
+
+  const signatureOk = crypto.verify(
+    'RSA-SHA256',
+    Buffer.from(`${parts[0]}.${parts[1]}`),
+    publicKey,
+    Buffer.from(parts[2], 'base64url')
+  );
+  if (!signatureOk) throw new Error('토큰 서명이 올바르지 않습니다.');
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (payload.aud !== FIREBASE_PROJECT_ID) throw new Error('다른 프로젝트의 토큰입니다.');
+  if (payload.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`) throw new Error('토큰 발급자가 올바르지 않습니다.');
+  if (typeof payload.exp !== 'number' || payload.exp <= nowSec) throw new Error('로그인이 만료되었습니다.');
+  if (typeof payload.iat !== 'number' || payload.iat > nowSec + 300) throw new Error('토큰 발급 시각이 올바르지 않습니다.');
+  if (!payload.sub || typeof payload.sub !== 'string') throw new Error('토큰에 사용자 정보가 없습니다.');
+  if (!payload.email || payload.email_verified !== true) throw new Error('이메일이 인증된 Google 계정만 사용할 수 있습니다.');
+
+  return {
+    uid: payload.sub,
+    email: String(payload.email).trim().toLowerCase(),
+    name: payload.name,
+    picture: payload.picture,
+  };
+}
+
+// 18-Table Multi-Tenant Database Store (+ licenses, auth_keys) — 메모리에 두고 JSON 파일로 저장
+const PERSISTED_TABLES = [
+  'companies',
+  'users',
+  'userCompanyRoles',
+  'teams',
+  'userTeamRoles',
+  'accounts',
+  'companyAccounts',
+  'bankAccounts',
+  'vendors',
+  'fiscalPeriods',
+  'transactions',
+  'transactionAttachments',
+  'budgets',
+  'bankImports',
+  'bankImportRows',
+  'auditLogs',
+  'licenses',
+  'authKeys',
+] as const;
+
 class AccountingDatabase {
   // 인증/권한
   companies: Company[] = [...INITIAL_COMPANIES];
@@ -82,6 +207,12 @@ class AccountingDatabase {
   // 관리
   auditLogs: AuditLog[] = [...INITIAL_AUDIT_LOGS];
 
+  // 라이선스 / 인증키
+  licenses: License[] = [];
+  authKeys: AuthKey[] = [];
+
+  private saveTimer: NodeJS.Timeout | null = null;
+
   // Helper to append audit log
   addAuditLog(entry: Omit<AuditLog, 'id' | 'created_at'>) {
     const newLog: AuditLog = {
@@ -92,15 +223,199 @@ class AccountingDatabase {
     this.auditLogs.unshift(newLog);
     return newLog;
   }
+
+  // 저장 파일이 있으면 불러온다 (없으면 빈 상태로 시작)
+  load() {
+    if (!fs.existsSync(DATA_FILE)) return;
+    try {
+      const saved = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
+      for (const table of PERSISTED_TABLES) {
+        if (Array.isArray(saved[table])) {
+          (this as any)[table] = saved[table];
+        }
+      }
+      console.log(`[db] 저장된 데이터를 불러왔습니다: ${DATA_FILE}`);
+    } catch (err) {
+      // 손상된 파일을 덮어써서 데이터를 잃지 않도록, 읽기에 실패하면 서버를 멈춘다.
+      console.error(`[db] 데이터 파일을 읽지 못했습니다: ${DATA_FILE}`, err);
+      throw err;
+    }
+  }
+
+  saveNow() {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    const snapshot: Record<string, unknown> = { saved_at: new Date().toISOString() };
+    for (const table of PERSISTED_TABLES) {
+      snapshot[table] = (this as any)[table];
+    }
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+    const tmpFile = `${DATA_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(snapshot));
+    fs.renameSync(tmpFile, DATA_FILE);
+  }
+
+  // 변경이 몰려도 한 번만 쓰도록 잠깐 모았다가 저장
+  scheduleSave() {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      try {
+        this.saveNow();
+      } catch (err) {
+        console.error('[db] 데이터 저장 실패:', err);
+      }
+    }, 200);
+  }
 }
 
 const db = new AccountingDatabase();
+db.load();
+
+// 라이선스 상태 계산: 중지 > 만료 > 정상
+function getLicenseState(license: License | undefined): LicenseState {
+  if (!license) return 'none';
+  if (license.status !== 'active') return 'suspended';
+  if (new Date(license.expires_at).getTime() <= Date.now()) return 'expired';
+  return 'active';
+}
+
+function getCompanyLicense(companyId: string): License | undefined {
+  return db.licenses.find((l) => l.company_id === companyId);
+}
+
+const LICENSE_BLOCK_MESSAGES: Record<Exclude<LicenseState, 'active'>, string> = {
+  none: '이 회사에는 유효한 라이선스가 없습니다. 대표 관리자가 인증키로 인증해야 사용할 수 있습니다.',
+  suspended: '이 회사의 라이선스가 관리자에 의해 중지되었습니다. 운영자에게 문의해 주세요.',
+  expired: '이 회사의 라이선스 사용 기간이 만료되었습니다. 대표 관리자가 새 인증키로 연장해 주세요.',
+};
+
+// 인증키 생성: XXXX-XXXX-XXXX-XXXX (헷갈리는 글자 0/O/1/I 제외, 암호학적 난수 사용)
+function generateAuthKeyText(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let text: string;
+  do {
+    const bytes = crypto.randomBytes(16);
+    const chars = Array.from(bytes, (b: number) => alphabet[b % alphabet.length]);
+    text = [0, 4, 8, 12].map((i) => chars.slice(i, i + 4).join('')).join('-');
+  } while (db.authKeys.some((k) => k.id === text));
+  return text;
+}
+
+function generateCompanyCode(): string {
+  let code: string;
+  do {
+    code = `C${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  } while (db.companies.some((c) => c.company_code === code));
+  return code;
+}
+
+// 새 회사(테넌트) 생성 + 기본 팀/회계기간/계정과목 세팅 + 대표 관리자(ORG_ADMIN) 지정
+function provisionCompany(
+  fields: {
+    company_code?: string;
+    company_name: string;
+    business_number?: string;
+    representative_name?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+  },
+  owner: User
+): Company {
+  const now = nowIso();
+  const newCompany: Company = {
+    id: `comp_${Date.now()}_${randomSuffix()}`,
+    company_code: (fields.company_code || generateCompanyCode()).toUpperCase(),
+    company_name: fields.company_name,
+    business_number: fields.business_number || '',
+    representative_name: fields.representative_name || owner.name,
+    address: fields.address || '',
+    phone: fields.phone || '',
+    email: fields.email || owner.email,
+    status: 'ACTIVE',
+    created_at: now,
+    updated_at: now,
+    user_count: 1,
+  };
+  db.companies.push(newCompany);
+
+  db.teams.push(
+    {
+      id: `team_${Date.now()}_${randomSuffix()}_ga`,
+      company_id: newCompany.id,
+      team_code: 'TEAM_GA',
+      team_name: '총무부서',
+      status: 'ACTIVE',
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: `team_${Date.now()}_${randomSuffix()}_biz`,
+      company_id: newCompany.id,
+      team_code: 'TEAM_BIZ',
+      team_name: '사업기획팀',
+      status: 'ACTIVE',
+      created_at: now,
+      updated_at: now,
+    }
+  );
+
+  // 이번 달 회계기간을 OPEN 상태로 연다
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth() + 1;
+  db.fiscalPeriods.push({
+    id: `fp_${newCompany.id}_${year}_${String(month).padStart(2, '0')}`,
+    company_id: newCompany.id,
+    year,
+    month,
+    status: 'OPEN',
+    created_at: now,
+    updated_at: now,
+  });
+
+  db.userCompanyRoles.push({
+    id: `ucr_${Date.now()}_${randomSuffix()}`,
+    user_id: owner.id,
+    company_id: newCompany.id,
+    role_id: 'ORG_ADMIN',
+    status: 'ACTIVE',
+    created_at: now,
+    updated_at: now,
+  });
+
+  // Default Company Accounts (Method B)
+  db.accounts.forEach((acc) => {
+    db.companyAccounts.push({
+      id: `ca_${newCompany.id}_${acc.id}`,
+      company_id: newCompany.id,
+      account_id: acc.id,
+      is_active: ['101', '103', '251', '253', '331', '4100', '4200', '5100', '5210', '5250'].includes(
+        acc.account_code
+      ),
+      created_at: now,
+    });
+  });
+
+  return newCompany;
+}
 
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
+
+  // 값을 바꾸는 요청이 끝나면 파일에 저장
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'GET') {
+      res.on('finish', () => db.scheduleSave());
+    }
+    next();
+  });
 
   // Multi-tenant Context Extraction Middleware
   interface TenantRequest extends Request {
@@ -108,36 +423,129 @@ async function startServer() {
     companyId?: string;
     userRole?: UserCompanyRole;
     isSuperAdmin?: boolean;
+    // 회사는 있지만 라이선스가 유효하지 않을 때의 상태 (최고관리자는 해당 없음)
+    licenseBlock?: Exclude<LicenseState, 'active'>;
   }
 
-  const tenantAuthMiddleware = (req: TenantRequest, res: Response, next: NextFunction) => {
-    // Current authenticated user (default to agnus9524@gmail.com / usr_hong)
-    const userId = (req.headers['x-user-id'] as string) || CURRENT_USER.id;
-    const user = db.users.find((u) => u.id === userId) || CURRENT_USER;
+  // 로그인 없이 호출할 수 있는 경로 (그 외 모든 /api 요청은 로그인 필수)
+  const PUBLIC_API_PATHS = new Set(['/health', '/v1/auth/config']);
+
+  // 요청에서 로그인 신원을 확인한다. 헤더의 사용자 ID 같은 자기신고 값은 절대 믿지 않는다.
+  const resolveIdentity = async (req: Request): Promise<VerifiedIdentity | null> => {
+    const header = String(req.headers.authorization || '');
+    if (header.startsWith('Bearer ')) {
+      return verifyFirebaseIdToken(header.slice(7).trim());
+    }
+    if (DEV_LOGIN_ENABLED && header.startsWith('Dev ')) {
+      const email = header.slice(4).trim().toLowerCase();
+      if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        return { uid: `dev|${email}`, email, name: email.split('@')[0] };
+      }
+    }
+    return null;
+  };
+
+  // 로그인한 신원에 해당하는 사용자 레코드를 찾거나 새로 만든다
+  const findOrCreateUser = (identity: VerifiedIdentity): User => {
+    const isSuper = identity.email === SUPER_ADMIN_EMAIL;
+    let user =
+      db.users.find((u) => u.auth_user_id === identity.uid) ||
+      db.users.find((u) => u.email.toLowerCase() === identity.email);
+    let changed = false;
+
+    if (!user) {
+      user = {
+        id: `usr_${Date.now()}_${randomSuffix()}`,
+        auth_user_id: identity.uid,
+        email: identity.email,
+        name: isSuper ? '최고관리자' : identity.name || identity.email.split('@')[0],
+        profile_image_url: identity.picture,
+        status: 'ACTIVE',
+        last_login_at: nowIso(),
+        created_at: nowIso(),
+        updated_at: nowIso(),
+        is_system_admin: isSuper,
+        is_super_admin: isSuper,
+      };
+      db.users.push(user);
+      db.addAuditLog({
+        company_id: 'system',
+        user_id: user.id,
+        user_name: user.name,
+        action: 'LOGIN',
+        entity_type: 'AUTH',
+        entity_id: user.id,
+        after_data: { email: user.email, first_login: true },
+      });
+      changed = true;
+    } else {
+      if (user.auth_user_id !== identity.uid) {
+        user.auth_user_id = identity.uid;
+        changed = true;
+      }
+      // 최고관리자 여부는 저장된 값이 아니라 항상 로그인 이메일로 다시 판정한다
+      if (!!user.is_super_admin !== isSuper || !!user.is_system_admin !== isSuper) {
+        user.is_super_admin = isSuper;
+        user.is_system_admin = isSuper;
+        changed = true;
+      }
+    }
+    if (changed) db.scheduleSave();
+    return user;
+  };
+
+  const tenantAuthMiddleware = async (req: TenantRequest, res: Response, next: NextFunction) => {
+    if (PUBLIC_API_PATHS.has(req.path)) return next();
+
+    let identity: VerifiedIdentity | null = null;
+    try {
+      identity = await resolveIdentity(req);
+    } catch (err: any) {
+      return res.status(401).json({ error: err?.message || '로그인 확인에 실패했습니다.', code: 'UNAUTHENTICATED' });
+    }
+    if (!identity) {
+      return res.status(401).json({ error: '로그인이 필요합니다.', code: 'UNAUTHENTICATED' });
+    }
+
+    const user = findOrCreateUser(identity);
     req.user = user;
-    req.isSuperAdmin = user.is_system_admin || user.is_super_admin || user.email === 'agnus9524@gmail.com';
+    req.isSuperAdmin = identity.email === SUPER_ADMIN_EMAIL;
+
+    if (user.status === 'SUSPENDED' && !req.isSuperAdmin && req.path !== '/v1/auth/me') {
+      return res.status(403).json({ error: '이용이 정지된 계정입니다. 관리자에게 문의해 주세요.', code: 'USER_SUSPENDED' });
+    }
 
     // Company context from header or query
     const companyId = (req.headers['x-company-id'] as string) || (req.query.company_id as string);
     if (companyId) {
       req.companyId = companyId;
-      // Check user membership in this company
-      const role = db.userCompanyRoles.find(
-        (r) => r.user_id === user.id && r.company_id === companyId && r.status === 'ACTIVE'
-      );
-      if (role) {
-        req.userRole = role;
-      } else if (req.isSuperAdmin) {
-        // Super Admin gets implicit SUPER_ADMIN role in all companies
+      if (req.isSuperAdmin) {
+        // Super Admin gets implicit SUPER_ADMIN role in all companies (라이선스와 무관)
         req.userRole = {
           id: `ucr_sa_${companyId}`,
           user_id: user.id,
           company_id: companyId,
           role_id: 'SUPER_ADMIN',
           status: 'ACTIVE',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          created_at: nowIso(),
+          updated_at: nowIso(),
         };
+      } else {
+        const role = db.userCompanyRoles.find(
+          (r) => r.user_id === user.id && r.company_id === companyId && r.status === 'ACTIVE'
+        );
+        const hasTeamRole = db.userTeamRoles.some(
+          (tr) => tr.user_id === user.id && db.teams.some((t) => t.id === tr.team_id && t.company_id === companyId)
+        );
+        if (role || hasTeamRole) {
+          const state = getLicenseState(getCompanyLicense(companyId));
+          if (state === 'active') {
+            // 라이선스가 유효할 때만 회사 권한을 부여한다
+            if (role) req.userRole = role;
+          } else {
+            req.licenseBlock = state;
+          }
+        }
       }
     }
     next();
@@ -145,214 +553,423 @@ async function startServer() {
 
   app.use('/api', tenantAuthMiddleware);
 
+  // 회사 관리자 여부 (최고관리자 또는 현재 회사의 대표 관리자)
+  const isCompanyAdmin = (req: TenantRequest) =>
+    !!req.isSuperAdmin || req.userRole?.role_id === 'ORG_ADMIN' || req.userRole?.role_id === 'ADMIN';
+
+  const requireSuperAdmin = (req: TenantRequest, res: Response, next: NextFunction) => {
+    if (!req.isSuperAdmin) {
+      return res.status(403).json({ error: '최고관리자만 사용할 수 있는 기능입니다.' });
+    }
+    next();
+  };
+
+  // 사용자가 속한(ACTIVE) 회사 목록
+  const getMemberCompanyIds = (userId: string): Set<string> => {
+    const ids = new Set<string>();
+    db.userCompanyRoles
+      .filter((r) => r.user_id === userId && r.status === 'ACTIVE')
+      .forEach((r) => ids.add(r.company_id));
+    db.userTeamRoles
+      .filter((tr) => tr.user_id === userId)
+      .forEach((tr) => {
+        const team = db.teams.find((t) => t.id === tr.team_id);
+        if (team) ids.add(team.company_id);
+      });
+    return ids;
+  };
+
+  const describeCompanyLicense = (companyId: string, userId: string) => {
+    const license = getCompanyLicense(companyId);
+    return {
+      state: getLicenseState(license),
+      expires_at: license ? license.expires_at : null,
+      is_owner: !!license && license.user_id === userId,
+    };
+  };
+
   // Health check
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
       app: 'don don multi-tenant accounting system',
-      architecture: '18 core tables with tenant isolation',
       time: new Date().toISOString(),
     });
   });
 
-  // Auth & Profile
+  // 로그인 화면이 어떤 로그인 방식을 쓸 수 있는지 확인하는 공개 정보
+  app.get('/api/v1/auth/config', (req, res) => {
+    res.json({ firebase_configured: !!FIREBASE_PROJECT_ID, dev_login: DEV_LOGIN_ENABLED });
+  });
+
+  // Auth & Profile — 로그인 직후 호출. 내 정보, 내 회사, 라이선스 상태를 돌려준다.
   app.get('/api/v1/auth/me', (req: TenantRequest, res: Response) => {
     const user = req.user!;
     const userRoles = db.userCompanyRoles.filter((r) => r.user_id === user.id && r.status === 'ACTIVE');
+    const memberCompanyIds = getMemberCompanyIds(user.id);
     const authorizedCompanies = req.isSuperAdmin
       ? db.companies
-      : db.companies.filter((c) => userRoles.some((r) => r.company_id === c.id));
+      : db.companies.filter((c) => memberCompanyIds.has(c.id));
+
+    const lastLogin = user.last_login_at ? new Date(user.last_login_at).getTime() : 0;
+    if (Date.now() - lastLogin > 60 * 1000) {
+      user.last_login_at = nowIso();
+      db.scheduleSave();
+    }
+
+    const pendingRequests = db.userCompanyRoles
+      .filter((r) => r.user_id === user.id && r.status === 'PENDING')
+      .map((r) => {
+        const c = db.companies.find((comp) => comp.id === r.company_id);
+        return { id: r.id, company_name: c?.company_name || '', company_code: c?.company_code || '', created_at: r.created_at };
+      });
 
     res.json({
       user,
+      is_super_admin: !!req.isSuperAdmin,
       roles: userRoles,
       companies: authorizedCompanies.map((comp) => {
         const role = userRoles.find((r) => r.company_id === comp.id);
         return {
           ...comp,
           my_role: req.isSuperAdmin ? 'SUPER_ADMIN' : role ? role.role_id : 'VIEWER',
+          license: describeCompanyLicense(comp.id, user.id),
         };
       }),
+      pending_requests: pendingRequests,
     });
   });
 
-  // Login Endpoint
-  app.post('/api/v1/auth/login', (req: Request, res: Response) => {
-    const { email, userId } = req.body || {};
-    let targetUser: User | undefined;
+  // 인증키로 라이선스 인증 — 처음이면 회사를 만들고 대표 관리자가 되며, 이미 대표라면 기간이 연장된다.
+  app.post('/api/v1/license/activate', (req: TenantRequest, res: Response) => {
+    const user = req.user!;
+    if (req.isSuperAdmin) {
+      return res.status(400).json({ error: '최고관리자 계정은 인증키 인증이 필요하지 않습니다.' });
+    }
 
-    if (userId) {
-      targetUser = db.users.find((u) => u.id === userId);
-    } else if (email) {
-      const cleanEmail = String(email).trim().toLowerCase();
-      targetUser = db.users.find((u) => u.email.toLowerCase() === cleanEmail);
+    const keyText = String(req.body?.key || '').trim().toUpperCase();
+    if (!keyText) {
+      return res.status(400).json({ error: '인증키를 입력해 주세요.' });
+    }
+    const authKey = db.authKeys.find((k) => k.id === keyText);
+    if (!authKey) {
+      return res.status(404).json({ error: '존재하지 않는 인증키입니다.' });
+    }
 
-      // agnus9524@gmail.com is guaranteed Super Admin
-      if (!targetUser && cleanEmail === 'agnus9524@gmail.com') {
-        targetUser = {
-          id: 'usr_hong',
-          auth_user_id: 'google-oauth2|agnus9524',
-          email: 'agnus9524@gmail.com',
-          name: '최고관리자 (agnus9524)',
-          department: '재무총괄 / 시스템총괄',
-          status: 'ACTIVE',
-          last_login_at: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          is_system_admin: true,
-          is_super_admin: true,
-        };
-        db.users.push(targetUser);
+    const ownedLicense = db.licenses.find(
+      (l) => l.user_id === user.id && db.companies.some((c) => c.id === l.company_id)
+    );
+
+    // 이미 사용된 키: 처음 사용한 계정에만 귀속된다 (키 하나를 여러 계정이 나눠 쓰는 것 방지)
+    if (authKey.status === 'used') {
+      if (authKey.used_by !== user.id) {
+        return res.status(409).json({ error: '이미 다른 계정에서 사용 중인 인증키입니다.' });
       }
+      if (!ownedLicense) {
+        return res.status(404).json({ error: '라이선스 정보를 찾을 수 없습니다. 운영자에게 문의해 주세요.' });
+      }
+      const state = getLicenseState(ownedLicense);
+      if (state !== 'active') {
+        return res.status(403).json({ error: LICENSE_BLOCK_MESSAGES[state], code: `LICENSE_${state.toUpperCase()}` });
+      }
+      return res.json({
+        success: true,
+        already_used: true,
+        license: ownedLicense,
+        company: db.companies.find((c) => c.id === ownedLicense.company_id),
+      });
     }
 
-    if (!targetUser) {
-      return res.status(401).json({ error: '등록되지 않은 사용자 계정입니다. 처음 오셨다면 하단의 [처음 오셨나요? 가입 신청하기]를 이용해주세요.' });
+    const durationDays = authKey.duration_days || 30;
+    const now = nowIso();
+    let license: License;
+    let company: Company;
+    let renewed = false;
+
+    if (ownedLicense) {
+      // 기존 대표 관리자: 남은 기간 뒤에 이어서 연장
+      if (ownedLicense.status !== 'active') {
+        return res.status(403).json({ error: LICENSE_BLOCK_MESSAGES.suspended, code: 'LICENSE_SUSPENDED' });
+      }
+      const base = Math.max(Date.now(), new Date(ownedLicense.expires_at).getTime());
+      ownedLicense.expires_at = new Date(base + durationDays * DAY_MS).toISOString();
+      ownedLicense.key = keyText;
+      ownedLicense.updated_at = now;
+      license = ownedLicense;
+      company = db.companies.find((c) => c.id === ownedLicense.company_id)!;
+      renewed = true;
+    } else {
+      // 라이선스가 삭제된(또는 없는) 회사의 대표 관리자라면 새 회사를 만들지 않고 그 회사에 다시 붙인다
+      const adminRoleWithoutLicense = db.userCompanyRoles.find(
+        (r) =>
+          r.user_id === user.id &&
+          r.status === 'ACTIVE' &&
+          r.role_id === 'ORG_ADMIN' &&
+          !getCompanyLicense(r.company_id) &&
+          db.companies.some((c) => c.id === r.company_id)
+      );
+      if (adminRoleWithoutLicense) {
+        company = db.companies.find((c) => c.id === adminRoleWithoutLicense.company_id)!;
+      } else {
+        const companyName = String(req.body?.company_name || '').trim();
+        if (!companyName) {
+          return res.status(400).json({ error: '회사명을 입력해 주세요.', code: 'COMPANY_NAME_REQUIRED' });
+        }
+        company = provisionCompany(
+          {
+            company_name: companyName,
+            business_number: String(req.body?.business_number || '').trim(),
+            representative_name: String(req.body?.representative_name || '').trim(),
+          },
+          user
+        );
+      }
+      license = {
+        id: `lic_${Date.now()}_${randomSuffix()}`,
+        user_id: user.id,
+        email: user.email,
+        company_id: company.id,
+        status: 'active',
+        expires_at: new Date(Date.now() + durationDays * DAY_MS).toISOString(),
+        key: keyText,
+        created_at: now,
+        updated_at: now,
+      };
+      db.licenses.push(license);
     }
 
-    if (targetUser.status === 'PENDING') {
-      return res.status(403).json({ error: '현재 관리자 가입 승인 대기 중입니다. 관리자의 권한 승인 완료 후 이용 가능합니다.' });
-    }
-
-    targetUser.last_login_at = new Date().toISOString();
-    targetUser.updated_at = new Date().toISOString();
-
-    const isSuperAdmin = !!(targetUser.is_system_admin || targetUser.is_super_admin || targetUser.email === 'agnus9524@gmail.com');
-    const userRoles = db.userCompanyRoles.filter((r) => r.user_id === targetUser!.id && r.status === 'ACTIVE');
-    const authorizedCompanies = isSuperAdmin
-      ? db.companies
-      : db.companies.filter((c) => userRoles.some((r) => r.company_id === c.id));
-
-    const teamRoles = db.userTeamRoles.filter((tr) => tr.user_id === targetUser!.id);
-
-    // Primary role label
-    let primaryRole = 'VIEWER';
-    if (isSuperAdmin) {
-      primaryRole = 'SUPER_ADMIN';
-    } else if (userRoles.some((r) => r.role_id === 'ORG_ADMIN')) {
-      primaryRole = 'ORG_ADMIN';
-    } else if (userRoles.some((r) => r.role_id === 'HQ_ACCOUNTANT')) {
-      primaryRole = 'HQ_ACCOUNTANT';
-    } else if (userRoles.some((r) => r.role_id === 'TEAM_MANAGER') || teamRoles.some((tr) => tr.role_id === 'TEAM_MANAGER')) {
-      primaryRole = 'TEAM_MANAGER';
-    } else if (userRoles.some((r) => r.role_id === 'TEAM_ACCOUNTANT') || teamRoles.some((tr) => tr.role_id === 'TEAM_ACCOUNTANT')) {
-      primaryRole = 'TEAM_ACCOUNTANT';
-    } else if (userRoles.length > 0) {
-      primaryRole = userRoles[0].role_id;
-    }
+    authKey.status = 'used';
+    authKey.used_by = user.id;
+    authKey.used_by_email = user.email;
+    authKey.used_at = now;
+    authKey.company_id = company.id;
 
     db.addAuditLog({
-      company_id: authorizedCompanies[0]?.id || 'system',
-      user_id: targetUser.id,
-      user_name: targetUser.name,
-      action: 'LOGIN',
-      entity_type: 'AUTH',
-      entity_id: targetUser.id,
-      after_data: { email: targetUser.email, role: primaryRole },
+      company_id: company.id,
+      user_id: user.id,
+      user_name: user.name,
+      action: 'ACTIVATE',
+      entity_type: 'LICENSE',
+      entity_id: license.id,
+      after_data: { renewed, duration_days: durationDays, expires_at: license.expires_at, company_name: company.company_name },
       ip_address: req.ip,
       user_agent: req.headers['user-agent'],
     });
 
-    res.json({
-      success: true,
-      user: targetUser,
-      primary_role: primaryRole,
-      is_super_admin: isSuperAdmin,
-      roles: userRoles,
-      team_roles: teamRoles,
-      companies: authorizedCompanies.map((comp) => {
-        const role = userRoles.find((r) => r.company_id === comp.id);
-        return {
-          ...comp,
-          my_role: isSuperAdmin ? 'SUPER_ADMIN' : role ? role.role_id : 'VIEWER',
-        };
-      }),
-    });
+    res.status(renewed ? 200 : 201).json({ success: true, renewed, license, company });
   });
 
-  // Request Join Company Endpoint
+  // Request Join Company Endpoint — 로그인한 사용자가 회사 코드로 소속 가입을 신청
   app.post('/api/v1/auth/request-join', (req: TenantRequest, res: Response) => {
-    const { company_id, reason, name, email, department } = req.body || {};
-    const targetCompanyId = company_id || req.companyId || (db.companies[0]?.id);
-
-    let targetUser: User | undefined;
-    if (email && String(email).trim()) {
-      const cleanEmail = String(email).trim().toLowerCase();
-      targetUser = db.users.find((u) => u.email.toLowerCase() === cleanEmail);
-      if (!targetUser) {
-        targetUser = {
-          id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          auth_user_id: `google-oauth2|${Date.now()}`,
-          email: cleanEmail,
-          name: name ? String(name).trim() : cleanEmail.split('@')[0],
-          department: department || '신규 신청',
-          status: 'PENDING',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          is_system_admin: false,
-          is_super_admin: false,
-        };
-        db.users.push(targetUser);
-      } else {
-        if (name && (!targetUser.name || targetUser.name === targetUser.email)) {
-          targetUser.name = String(name).trim();
-        }
-      }
-    } else {
-      targetUser = req.user || db.users[0];
+    const user = req.user!;
+    const companyCode = String(req.body?.company_code || '').trim().toUpperCase();
+    const reason = String(req.body?.reason || '').trim();
+    if (!companyCode) {
+      return res.status(400).json({ error: '회사 코드를 입력해 주세요.' });
+    }
+    const company = db.companies.find((c) => c.company_code.toUpperCase() === companyCode);
+    if (!company) {
+      return res.status(404).json({ error: '해당 회사 코드를 찾을 수 없습니다. 대표 관리자에게 회사 코드를 확인해 주세요.' });
     }
 
-    const existing = db.userCompanyRoles.find(
-      (r) => r.user_id === targetUser!.id && r.company_id === targetCompanyId
-    );
+    const existing = db.userCompanyRoles.find((r) => r.user_id === user.id && r.company_id === company.id);
+    if (existing && existing.status === 'ACTIVE') {
+      return res.status(400).json({ error: '이미 소속된 회사입니다.' });
+    }
 
     if (existing) {
       existing.status = 'PENDING';
-      (existing as any).reason = reason || (existing as any).reason;
-      existing.updated_at = new Date().toISOString();
+      existing.reason = reason || existing.reason;
+      existing.updated_at = nowIso();
     } else {
       db.userCompanyRoles.push({
-        id: `ucr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        user_id: targetUser.id,
-        company_id: targetCompanyId,
+        id: `ucr_${Date.now()}_${randomSuffix()}`,
+        user_id: user.id,
+        company_id: company.id,
         role_id: 'VIEWER',
         status: 'PENDING',
-        reason: reason || '',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as any);
+        reason,
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
     }
 
     db.addAuditLog({
-      company_id: targetCompanyId,
-      user_id: targetUser.id,
-      user_name: targetUser.name,
+      company_id: company.id,
+      user_id: user.id,
+      user_name: user.name,
       action: 'CREATE',
       entity_type: 'USER_COMPANY_ROLE_REQUEST',
-      entity_id: targetUser.id,
-      after_data: { name: targetUser.name, email: targetUser.email, reason, status: 'PENDING', company_id: targetCompanyId },
+      entity_id: user.id,
+      after_data: { name: user.name, email: user.email, reason, status: 'PENDING', company_id: company.id },
       ip_address: req.ip,
       user_agent: req.headers['user-agent'],
     });
 
     res.json({
       success: true,
-      message: '회사 소속 가입 신청이 정상 접수되었습니다. 관리자 승인 후 권한이 부여됩니다.',
+      company_name: company.company_name,
+      message: '회사 소속 가입 신청이 정상 접수되었습니다. 대표 관리자 승인 후 권한이 부여됩니다.',
     });
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // 슈퍼 관리자 패널 API — 회원 라이선스 / 인증키 관리 (최고관리자 전용)
+  // ────────────────────────────────────────────────────────────────
+
+  app.get('/api/v1/super/licenses', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const rows = db.licenses
+      .map((lic) => {
+        const company = db.companies.find((c) => c.id === lic.company_id);
+        const owner = db.users.find((u) => u.id === lic.user_id);
+        return {
+          ...lic,
+          state: getLicenseState(lic),
+          user_name: owner?.name || '',
+          company_name: company?.company_name || '(삭제된 회사)',
+          company_code: company?.company_code || '',
+          member_count: db.userCompanyRoles.filter((r) => r.company_id === lic.company_id && r.status === 'ACTIVE').length,
+        };
+      })
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    res.json({ licenses: rows });
+  });
+
+  app.put('/api/v1/super/licenses/:id', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const license = db.licenses.find((l) => l.id === req.params.id);
+    if (!license) {
+      return res.status(404).json({ error: '라이선스를 찾을 수 없습니다.' });
+    }
+    const before = { status: license.status, expires_at: license.expires_at };
+    const { status, extend_days } = req.body || {};
+
+    if (status !== undefined) {
+      if (status !== 'active' && status !== 'suspended') {
+        return res.status(400).json({ error: 'status는 active 또는 suspended여야 합니다.' });
+      }
+      license.status = status;
+    }
+    if (extend_days !== undefined) {
+      const days = Number(extend_days);
+      if (!Number.isFinite(days) || days <= 0 || days > 3650) {
+        return res.status(400).json({ error: '연장 일수는 1~3650 사이여야 합니다.' });
+      }
+      // 이미 만료됐다면 오늘부터, 아니면 기존 만료일 뒤로 이어서 연장
+      const base = Math.max(Date.now(), new Date(license.expires_at).getTime());
+      license.expires_at = new Date(base + days * DAY_MS).toISOString();
+      license.status = 'active';
+    }
+    license.updated_at = nowIso();
+
+    db.addAuditLog({
+      company_id: license.company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'UPDATE',
+      entity_type: 'LICENSE',
+      entity_id: license.id,
+      before_data: before,
+      after_data: { status: license.status, expires_at: license.expires_at },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, license: { ...license, state: getLicenseState(license) } });
+  });
+
+  // 라이선스 삭제: 회사 데이터는 남기고 사용만 막는다. 대표 관리자가 새 인증키로 인증하면 같은 회사로 복구된다.
+  app.delete('/api/v1/super/licenses/:id', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const idx = db.licenses.findIndex((l) => l.id === req.params.id);
+    if (idx === -1) {
+      return res.status(404).json({ error: '라이선스를 찾을 수 없습니다.' });
+    }
+    const [removed] = db.licenses.splice(idx, 1);
+    db.addAuditLog({
+      company_id: removed.company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'DELETE',
+      entity_type: 'LICENSE',
+      entity_id: removed.id,
+      before_data: removed,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+    res.json({ success: true });
+  });
+
+  app.get('/api/v1/super/auth-keys', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const keys = [...db.authKeys]
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map((k) => ({
+        ...k,
+        company_name: k.company_id ? db.companies.find((c) => c.id === k.company_id)?.company_name || '' : '',
+      }));
+    res.json({ auth_keys: keys });
+  });
+
+  app.post('/api/v1/super/auth-keys', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const durationDays = Number(req.body?.duration_days ?? 30);
+    if (!Number.isInteger(durationDays) || durationDays <= 0 || durationDays > 3650) {
+      return res.status(400).json({ error: '유효 기간은 1~3650일 사이의 정수여야 합니다.' });
+    }
+    const newKey: AuthKey = {
+      id: generateAuthKeyText(),
+      status: 'unused',
+      duration_days: durationDays,
+      memo: String(req.body?.memo || '').trim().slice(0, 100) || undefined,
+      created_at: nowIso(),
+      created_by: req.user!.id,
+    };
+    db.authKeys.push(newKey);
+    db.addAuditLog({
+      company_id: 'system',
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'CREATE',
+      entity_type: 'AUTH_KEY',
+      entity_id: newKey.id,
+      after_data: { duration_days: durationDays, memo: newKey.memo },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+    res.status(201).json({ auth_key: newKey });
+  });
+
+  // 인증키 폐기: 미사용 키는 더 이상 쓸 수 없게 되고, 사용된 키는 기록만 지워진다(라이선스는 유지)
+  app.delete('/api/v1/super/auth-keys/:id', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const idx = db.authKeys.findIndex((k) => k.id === req.params.id);
+    if (idx === -1) {
+      return res.status(404).json({ error: '인증키를 찾을 수 없습니다.' });
+    }
+    const [removed] = db.authKeys.splice(idx, 1);
+    db.addAuditLog({
+      company_id: removed.company_id || 'system',
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'DELETE',
+      entity_type: 'AUTH_KEY',
+      entity_id: removed.id,
+      before_data: removed,
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+    res.json({ success: true });
   });
 
   // Companies List
   app.get('/api/v1/companies', (req: TenantRequest, res: Response) => {
     const user = req.user!;
-    const userRoles = db.userCompanyRoles.filter((r) => r.user_id === user.id && r.status === 'ACTIVE');
+    const memberCompanyIds = getMemberCompanyIds(user.id);
     const result = req.isSuperAdmin
       ? db.companies
-      : db.companies.filter((c) => userRoles.some((r) => r.company_id === c.id));
+      : db.companies.filter((c) => memberCompanyIds.has(c.id));
 
     res.json({
       companies: result.map((c) => ({
         ...c,
-        user_count: db.userCompanyRoles.filter((r) => r.company_id === c.id).length,
+        user_count: db.userCompanyRoles.filter((r) => r.company_id === c.id && r.status === 'ACTIVE').length,
+        license: describeCompanyLicense(c.id, user.id),
       })),
     });
   });
@@ -372,80 +989,10 @@ async function startServer() {
       return res.status(400).json({ error: '이미 존재하는 회사 코드입니다.' });
     }
 
-    const newCompany: Company = {
-      id: `comp_${Date.now()}`,
-      company_code: company_code.toUpperCase(),
-      company_name,
-      business_number: business_number || '000-00-00000',
-      representative_name: representative_name || '대표자',
-      address: address || '',
-      phone: phone || '',
-      email: email || '',
-      status: 'ACTIVE',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      user_count: 1,
-    };
-
-    db.companies.push(newCompany);
-
-    // Default Teams
-    const defaultTeams: Team[] = [
-      {
-        id: `team_${Date.now()}_ga`,
-        company_id: newCompany.id,
-        team_code: 'TEAM_GA',
-        team_name: '총무부서',
-        status: 'ACTIVE',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-      {
-        id: `team_${Date.now()}_biz`,
-        company_id: newCompany.id,
-        team_code: 'TEAM_BIZ',
-        team_name: '사업기획팀',
-        status: 'ACTIVE',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-    ];
-    db.teams.push(...defaultTeams);
-
-    // Initial Open Fiscal Period (2026-09)
-    db.fiscalPeriods.push({
-      id: `fp_${newCompany.id}_2026_09`,
-      company_id: newCompany.id,
-      year: 2026,
-      month: 9,
-      status: 'OPEN',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-
-    // Default User-Company Role: creator gets ORG_ADMIN
-    db.userCompanyRoles.push({
-      id: `ucr_${Date.now()}`,
-      user_id: req.user!.id,
-      company_id: newCompany.id,
-      role_id: 'ORG_ADMIN',
-      status: 'ACTIVE',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-
-    // Default Company Accounts (Method B)
-    db.accounts.forEach((acc) => {
-      db.companyAccounts.push({
-        id: `ca_${newCompany.id}_${acc.id}`,
-        company_id: newCompany.id,
-        account_id: acc.id,
-        is_active: ['101', '103', '251', '253', '331', '4100', '4200', '5100', '5210', '5250'].includes(
-          acc.account_code
-        ),
-        created_at: new Date().toISOString(),
-      });
-    });
+    const newCompany = provisionCompany(
+      { company_code, company_name, business_number, representative_name, address, phone, email },
+      req.user!
+    );
 
     // Audit Log
     db.addAuditLog({
@@ -498,7 +1045,9 @@ async function startServer() {
     db.budgets = db.budgets.filter((b) => b.company_id !== companyId);
     db.bankImports = db.bankImports.filter((bi) => bi.company_id !== companyId);
     db.bankImportRows = db.bankImportRows.filter((bir) => bir.company_id !== companyId);
+    db.userTeamRoles = db.userTeamRoles.filter((utr) => db.teams.some((t) => t.id === utr.team_id));
     db.userCompanyRoles = db.userCompanyRoles.filter((ucr) => ucr.company_id !== companyId);
+    db.licenses = db.licenses.filter((lic) => lic.company_id !== companyId);
 
     db.addAuditLog({
       company_id: companyId,
@@ -528,6 +1077,13 @@ async function startServer() {
     const company = db.companies.find((c) => c.id === companyId);
     if (!company) {
       return res.status(404).json({ error: '회사를 찾을 수 없습니다.' });
+    }
+    // 라이선스가 없거나 만료/중지된 회사는 최고관리자 외에는 사용할 수 없다
+    if (!req.isSuperAdmin && req.licenseBlock) {
+      return res.status(403).json({
+        error: LICENSE_BLOCK_MESSAGES[req.licenseBlock],
+        code: `LICENSE_${req.licenseBlock.toUpperCase()}`,
+      });
     }
     // Check permission
     if (!req.isSuperAdmin && !req.userRole) {
@@ -1514,12 +2070,29 @@ async function startServer() {
 
   // Admin: User-Company Roles Management
   app.get('/api/v1/admin/users-and-roles', (req: TenantRequest, res: Response) => {
+    if (req.isSuperAdmin) {
+      return res.json({
+        users: db.users,
+        roles: db.userCompanyRoles,
+        companies: db.companies,
+        all_roles: db.roles,
+        team_roles: db.userTeamRoles,
+      });
+    }
+
+    // 일반 사용자는 자기가 속한 회사의 사용자·권한만 볼 수 있다 (다른 회사 정보 차단)
+    const myCompanyIds = getMemberCompanyIds(req.user!.id);
+    const roles = db.userCompanyRoles.filter((r) => myCompanyIds.has(r.company_id));
+    const teamRoles = db.userTeamRoles.filter((tr) =>
+      db.teams.some((t) => t.id === tr.team_id && myCompanyIds.has(t.company_id))
+    );
+    const visibleUserIds = new Set<string>([req.user!.id, ...roles.map((r) => r.user_id), ...teamRoles.map((tr) => tr.user_id)]);
     res.json({
-      users: db.users,
-      roles: db.userCompanyRoles,
-      companies: db.companies,
-      all_roles: db.roles,
-      team_roles: db.userTeamRoles,
+      users: db.users.filter((u) => visibleUserIds.has(u.id)),
+      roles,
+      companies: db.companies.filter((c) => myCompanyIds.has(c.id)),
+      all_roles: db.roles.filter((r) => r.role_code !== 'SUPER_ADMIN'),
+      team_roles: teamRoles,
     });
   });
 
@@ -1529,9 +2102,24 @@ async function startServer() {
       return res.status(400).json({ error: 'user_id, company_id, role_id는 필수입니다.' });
     }
 
-    const callerRole = req.userRole?.role_id;
-    if (!req.isSuperAdmin && callerRole !== 'ORG_ADMIN' && callerRole !== 'ADMIN' && callerRole !== 'SUPER_ADMIN') {
+    if (!isCompanyAdmin(req) || (!req.isSuperAdmin && company_id !== req.companyId)) {
       return res.status(403).json({ error: '사용자 역할 및 권한 배정 권한이 없습니다.' });
+    }
+    if (!db.companies.some((c) => c.id === company_id) || !db.users.some((u) => u.id === user_id)) {
+      return res.status(404).json({ error: '회사 또는 사용자를 찾을 수 없습니다.' });
+    }
+    if (role_id === 'SUPER_ADMIN' || !db.roles.some((r) => r.role_code === role_id)) {
+      return res.status(400).json({ error: '배정할 수 없는 역할입니다.' });
+    }
+    if (!req.isSuperAdmin) {
+      // 대표 관리자는 이미 회사에 소속(또는 가입 신청)된 사용자의 역할만 바꿀 수 있다
+      if (!db.userCompanyRoles.some((r) => r.user_id === user_id && r.company_id === company_id)) {
+        return res.status(403).json({ error: '이 회사에 소속되거나 가입 신청한 사용자만 권한을 배정할 수 있습니다.' });
+      }
+      // 라이선스를 가진 대표 관리자의 역할은 내릴 수 없다
+      if (getCompanyLicense(company_id)?.user_id === user_id && role_id !== 'ORG_ADMIN') {
+        return res.status(403).json({ error: '라이선스 대표 관리자의 역할은 변경할 수 없습니다.' });
+      }
     }
 
     const existingIdx = db.userCompanyRoles.findIndex(
@@ -1584,12 +2172,13 @@ async function startServer() {
 
   // Admin: Update Custom Permissions for User-Company Role (A가 B에게 특정 메뉴 권한 허용/제한)
   app.put('/api/v1/admin/user-company-roles/:id/permissions', (req: TenantRequest, res: Response) => {
-    const callerRole = req.userRole?.role_id;
-    if (!req.isSuperAdmin && callerRole !== 'ORG_ADMIN' && callerRole !== 'ADMIN' && callerRole !== 'SUPER_ADMIN') {
+    if (!isCompanyAdmin(req)) {
       return res.status(403).json({ error: '개별 메뉴 권한 조정 권한이 없습니다.' });
     }
 
-    const roleRecord = db.userCompanyRoles.find((r) => r.id === req.params.id);
+    const roleRecord = db.userCompanyRoles.find(
+      (r) => r.id === req.params.id && (req.isSuperAdmin || r.company_id === req.companyId)
+    );
     if (!roleRecord) {
       return res.status(404).json({ error: '해당 권한 레코드를 찾을 수 없습니다.' });
     }
@@ -1617,6 +2206,15 @@ async function startServer() {
     if (!user_id || !team_id || !company_id || !role_id) {
       return res.status(400).json({ error: 'user_id, team_id, company_id, role_id가 필요합니다.' });
     }
+    if (!isCompanyAdmin(req) || (!req.isSuperAdmin && company_id !== req.companyId)) {
+      return res.status(403).json({ error: '팀 권한 배정 권한이 없습니다.' });
+    }
+    if (!db.teams.some((t) => t.id === team_id && t.company_id === company_id)) {
+      return res.status(404).json({ error: '이 회사의 팀을 찾을 수 없습니다.' });
+    }
+    if (!req.isSuperAdmin && !getMemberCompanyIds(user_id).has(company_id)) {
+      return res.status(403).json({ error: '이 회사에 소속된 사용자만 팀에 배정할 수 있습니다.' });
+    }
 
     const newTeamRole = {
       id: `utr_${Date.now()}`,
@@ -1632,7 +2230,14 @@ async function startServer() {
   });
 
   app.delete('/api/v1/admin/user-team-roles/:id', (req: TenantRequest, res: Response) => {
-    const idx = db.userTeamRoles.findIndex((utr) => utr.id === req.params.id);
+    if (!isCompanyAdmin(req)) {
+      return res.status(403).json({ error: '팀 권한 제거 권한이 없습니다.' });
+    }
+    const idx = db.userTeamRoles.findIndex(
+      (utr) =>
+        utr.id === req.params.id &&
+        (req.isSuperAdmin || db.teams.some((t) => t.id === utr.team_id && t.company_id === req.companyId))
+    );
     if (idx !== -1) {
       db.userTeamRoles.splice(idx, 1);
     }
@@ -1642,9 +2247,12 @@ async function startServer() {
   // Admin: Get Join Requests
   app.get('/api/v1/admin/join-requests', (req: TenantRequest, res: Response) => {
     const compId = req.companyId;
-    const pendingRoles = db.userCompanyRoles.filter(
-      (r) => r.status === 'PENDING' && (req.isSuperAdmin || !compId || r.company_id === compId)
-    );
+    // 가입 신청은 그 회사의 대표 관리자(와 최고관리자)만 볼 수 있다
+    const pendingRoles = isCompanyAdmin(req)
+      ? db.userCompanyRoles.filter(
+          (r) => r.status === 'PENDING' && (req.isSuperAdmin ? !compId || r.company_id === compId : r.company_id === compId)
+        )
+      : [];
 
     const requests = pendingRoles.map((r) => {
       const u = db.users.find((user) => user.id === r.user_id);
@@ -1670,13 +2278,17 @@ async function startServer() {
 
   // Admin: Approve Join Request & Assign Role
   app.post('/api/v1/admin/join-requests/:id/approve', (req: TenantRequest, res: Response) => {
-    const roleId = req.userRole?.role_id;
-    if (!req.isSuperAdmin && roleId !== 'ORG_ADMIN' && roleId !== 'SUPER_ADMIN' && roleId !== 'ADMIN') {
+    if (!isCompanyAdmin(req)) {
       return res.status(403).json({ error: '가입 승인 및 권한 부여 권한이 없습니다.' });
     }
 
     const { role_id = 'VIEWER' } = req.body || {};
-    const reqRecord = db.userCompanyRoles.find((r) => r.id === req.params.id);
+    if (role_id === 'SUPER_ADMIN' || !db.roles.some((r) => r.role_code === role_id)) {
+      return res.status(400).json({ error: '배정할 수 없는 역할입니다.' });
+    }
+    const reqRecord = db.userCompanyRoles.find(
+      (r) => r.id === req.params.id && (req.isSuperAdmin || r.company_id === req.companyId)
+    );
     if (!reqRecord) {
       return res.status(404).json({ error: '가입 신청 건을 찾을 수 없습니다.' });
     }
@@ -1713,12 +2325,13 @@ async function startServer() {
 
   // Admin: Reject Join Request
   app.post('/api/v1/admin/join-requests/:id/reject', (req: TenantRequest, res: Response) => {
-    const roleId = req.userRole?.role_id;
-    if (!req.isSuperAdmin && roleId !== 'ORG_ADMIN' && roleId !== 'SUPER_ADMIN' && roleId !== 'ADMIN') {
+    if (!isCompanyAdmin(req)) {
       return res.status(403).json({ error: '가입 반려 권한이 없습니다.' });
     }
 
-    const reqRecord = db.userCompanyRoles.find((r) => r.id === req.params.id);
+    const reqRecord = db.userCompanyRoles.find(
+      (r) => r.id === req.params.id && (req.isSuperAdmin || r.company_id === req.companyId)
+    );
     if (!reqRecord) {
       return res.status(404).json({ error: '가입 신청 건을 찾을 수 없습니다.' });
     }
@@ -1743,28 +2356,60 @@ async function startServer() {
 
   // Admin: Update User Status
   app.put('/api/v1/admin/users/:id/status', (req: TenantRequest, res: Response) => {
-    const roleId = req.userRole?.role_id;
-    if (!req.isSuperAdmin && roleId !== 'ORG_ADMIN' && roleId !== 'SUPER_ADMIN' && roleId !== 'ADMIN') {
+    if (!isCompanyAdmin(req)) {
       return res.status(403).json({ error: '사용자 상태 변경 권한이 없습니다.' });
     }
 
-    const { status } = req.body;
+    const { status } = req.body || {};
+    if (status !== 'ACTIVE' && status !== 'SUSPENDED' && status !== 'PENDING') {
+      return res.status(400).json({ error: '올바르지 않은 상태 값입니다.' });
+    }
     const targetUser = db.users.find((u) => u.id === req.params.id);
     if (!targetUser) {
       return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
     }
+    if (targetUser.email.toLowerCase() === SUPER_ADMIN_EMAIL) {
+      return res.status(403).json({ error: '최고관리자 계정의 상태는 변경할 수 없습니다.' });
+    }
 
     const prevStatus = targetUser.status;
-    targetUser.status = status;
-    targetUser.updated_at = new Date().toISOString();
 
-    if (status === 'ACTIVE') {
-      db.userCompanyRoles
-        .filter((r) => r.user_id === targetUser.id && r.status === 'PENDING')
-        .forEach((r) => {
-          r.status = 'ACTIVE';
-          r.updated_at = new Date().toISOString();
-        });
+    if (req.isSuperAdmin) {
+      // 최고관리자: 계정 자체의 상태를 바꾼다
+      targetUser.status = status;
+      targetUser.updated_at = nowIso();
+      if (status === 'ACTIVE') {
+        db.userCompanyRoles
+          .filter((r) => r.user_id === targetUser.id && r.status === 'PENDING')
+          .forEach((r) => {
+            r.status = 'ACTIVE';
+            r.updated_at = nowIso();
+          });
+      }
+    } else {
+      // 대표 관리자: 자기 회사 안에서의 소속 상태만 바꾼다 (다른 회사 소속에는 영향 없음)
+      const membership = db.userCompanyRoles.find(
+        (r) => r.user_id === targetUser.id && r.company_id === req.companyId
+      );
+      if (!membership) {
+        return res.status(404).json({ error: '이 회사에 소속된 사용자가 아닙니다.' });
+      }
+      if (targetUser.id === req.user!.id) {
+        return res.status(400).json({ error: '본인 계정의 상태는 변경할 수 없습니다.' });
+      }
+      if (getCompanyLicense(req.companyId!)?.user_id === targetUser.id) {
+        return res.status(403).json({ error: '라이선스 대표 관리자의 상태는 변경할 수 없습니다.' });
+      }
+      membership.status = status;
+      membership.updated_at = nowIso();
+      // 이 회사에만 소속된 사용자라면 계정 표시 상태도 함께 맞춘다
+      const otherMemberships = db.userCompanyRoles.filter(
+        (r) => r.user_id === targetUser.id && r.company_id !== req.companyId
+      );
+      if (otherMemberships.length === 0) {
+        targetUser.status = status;
+        targetUser.updated_at = nowIso();
+      }
     }
 
     db.addAuditLog({
@@ -1799,8 +2444,28 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`don don Accounting Server (18 Tables Multi-Tenant) running on http://0.0.0.0:${PORT}`);
+    console.log(`돈돈 회계관리 프로그램 서버 실행 중: http://localhost:${PORT}`);
+    console.log(`  최고관리자 계정: ${SUPER_ADMIN_EMAIL}`);
+    console.log(`  데이터 저장 파일: ${DATA_FILE}`);
+    if (!FIREBASE_PROJECT_ID) {
+      console.warn('  ⚠ Firebase가 설정되지 않았습니다. firebase-applet-config.json을 채워야 Google 로그인이 동작합니다.');
+    }
+    if (DEV_LOGIN_ENABLED) {
+      console.warn('  ⚠ 개발용 로그인(DONDON_DEV_LOGIN)이 켜져 있습니다. 실제 운영에서는 반드시 끄세요.');
+    }
   });
+
+  // 종료 시 마지막 변경분까지 저장
+  const flushAndExit = () => {
+    try {
+      db.saveNow();
+    } catch (err) {
+      console.error('[db] 종료 중 저장 실패:', err);
+    }
+    process.exit(0);
+  };
+  process.on('SIGINT', flushAndExit);
+  process.on('SIGTERM', flushAndExit);
 }
 
 startServer();
