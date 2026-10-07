@@ -55,6 +55,7 @@ interface AdminAccountingSettingsViewProps {
   userRole: string;
   onToggleAccount: (accountId: string, isActive: boolean) => Promise<void>;
   onCreateAccount?: (payload: Partial<Account> & { is_active?: boolean }) => Promise<void>;
+  onBatchCreateAccounts?: (newAccountsList: any[]) => Promise<any>;
   onDeleteAccount?: (accountId: string) => Promise<void>;
   onAddBankAccount?: (payload: any) => Promise<void>;
 }
@@ -68,6 +69,7 @@ export const AdminAccountingSettingsView: React.FC<AdminAccountingSettingsViewPr
   userRole,
   onToggleAccount,
   onCreateAccount,
+  onBatchCreateAccounts,
   onDeleteAccount,
   onAddBankAccount,
 }) => {
@@ -614,6 +616,7 @@ export const AdminAccountingSettingsView: React.FC<AdminAccountingSettingsViewPr
             accounts={accounts}
             onToggleAccount={onToggleAccount}
             onCreateAccount={onCreateAccount}
+            onBatchCreateAccounts={onBatchCreateAccounts}
             onDeleteAccount={onDeleteAccount}
             userRole={userRole}
           />

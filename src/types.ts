@@ -181,6 +181,8 @@ export interface Account {
   parent_id?: string;
   category: string;
   is_system: boolean;
+  // 회사가 직접 추가한 계정과목이면 그 회사 ID. 없으면 모든 회사가 함께 쓰는 공통 계정과목.
+  company_id?: string;
   is_active?: boolean; // Convenience flag when merged with company_accounts
   description?: string;
   created_at?: string;

@@ -355,6 +355,14 @@ export default function App() {
     setAccounts((prev) => [...prev, newAccount]);
   };
 
+  // Handler: Batch create accounts from Excel
+  const handleBatchCreateAccounts = async (newAccountsList: any[]) => {
+    const result = await api.batchCreateAccounts(newAccountsList);
+    const refreshed = await api.getAccounts();
+    setAccounts(refreshed);
+    return result;
+  };
+
   // Handler: Delete account
   const handleDeleteAccount = async (accountId: string) => {
     await api.deleteAccount(accountId);
@@ -751,6 +759,7 @@ export default function App() {
                   userRole={currentRole}
                   onToggleAccount={handleToggleAccount}
                   onCreateAccount={handleCreateAccount}
+                  onBatchCreateAccounts={handleBatchCreateAccounts}
                   onDeleteAccount={handleDeleteAccount}
                   onAddBankAccount={handleAddBankAccount}
                 />
@@ -783,7 +792,7 @@ export default function App() {
                   userRoles={allUserRoles}
                   teamRoles={teamRoles}
                   currentUserId={currentUser.id}
-                  onSwitchUser={() => {}}
+                  onSwitchUser={async () => {}}
                   onAssignRole={handleAssignRole}
                   onUpdateUserStatus={handleUpdateUserStatus}
                   onAssignTeamRole={handleAssignTeamRole}
