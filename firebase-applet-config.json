@@ -1,8 +1,10 @@
 {
-  "apiKey": "YOUR_API_KEY",
-  "authDomain": "YOUR_PROJECT_ID.firebaseapp.com",
-  "projectId": "YOUR_PROJECT_ID",
-  "storageBucket": "YOUR_PROJECT_ID.firebasestorage.app",
-  "messagingSenderId": "YOUR_SENDER_ID",
-  "appId": "YOUR_APP_ID"
+  "projectId": "gen-lang-client-0242428421",
+  "appId": "1:529532959435:web:46ed7a9def775d00ca794e",
+  "apiKey": "AIzaSyDbxlDGB4rrP5d5fI3ER0uCKYnwAkeXNQ4",
+  "authDomain": "gen-lang-client-0242428421.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-dondon-bebd3703-2c06-4b36-ab3d-f52fe4ccf54a",
+  "storageBucket": "gen-lang-client-0242428421.firebasestorage.app",
+  "messagingSenderId": "529532959435",
+  "oAuthClientId": "529532959435-l5dctv2o30f5ql71sdsf4l3simr6858j.apps.googleusercontent.com"
 }
