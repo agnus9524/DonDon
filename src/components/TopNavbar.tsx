@@ -172,15 +172,17 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                   <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
                   전체 회사 선택 화면 열기
                 </button>
-                <button
-                  onClick={() => {
-                    setCompanyDropdownOpen(false);
-                    onOpenNewCompanyModal();
-                  }}
-                  className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg flex items-center gap-2 font-semibold"
-                >
-                  <Plus className="w-3.5 h-3.5" />새 회사(법인) 추가 등록
-                </button>
+                {(currentUser.is_super_admin || currentUser.email === 'agnus9524@gmail.com') && (
+                  <button
+                    onClick={() => {
+                      setCompanyDropdownOpen(false);
+                      onOpenNewCompanyModal();
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg flex items-center gap-2 font-semibold"
+                  >
+                    <Plus className="w-3.5 h-3.5" />새 회사(법인) 추가 등록 (최고관리자)
+                  </button>
+                )}
               </div>
             </div>
           )}

@@ -29,14 +29,14 @@ export const AdminPermissionsView: React.FC<AdminPermissionsViewProps> = ({ curr
       {/* Header */}
       <div>
         <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">권한 설정 (역할별 기본 권한)</h1>
+          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">회계권한관리</h1>
           <span className="text-xs bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded border border-indigo-200">
             role_permissions
           </span>
         </div>
         <p className="text-xs text-slate-500 mt-1">
-          역할(Role)마다 어떤 기능을 사용할 수 있는지 한눈에 보여주는 기준표입니다. 개별 사용자에 대한 예외(추가/제한)는{' '}
-          <strong className="text-slate-700">사용자 관리 &rarr; 사용자 상세</strong>에서 설정합니다.
+          역할(Role)마다 어떤 회계 및 관리 기능을 사용할 수 있는지 한눈에 보여주는 기준표입니다. 개별 사용자에 대한 예외(추가/제한)는{' '}
+          <strong className="text-slate-700">권한관리 &rarr; 사용자 상세</strong>에서 설정합니다.
         </p>
       </div>
 

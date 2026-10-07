@@ -207,7 +207,11 @@ async function startServer() {
     }
 
     if (!targetUser) {
-      return res.status(401).json({ error: '등록되지 않은 사용자 계정입니다. 이메일을 다시 확인해주세요.' });
+      return res.status(401).json({ error: '등록되지 않은 사용자 계정입니다. 처음 오셨다면 하단의 [처음 오셨나요? 가입 신청하기]를 이용해주세요.' });
+    }
+
+    if (targetUser.status === 'PENDING') {
+      return res.status(403).json({ error: '현재 관리자 가입 승인 대기 중입니다. 관리자의 권한 승인 완료 후 이용 가능합니다.' });
     }
 
     targetUser.last_login_at = new Date().toISOString();
@@ -268,42 +272,73 @@ async function startServer() {
 
   // Request Join Company Endpoint
   app.post('/api/v1/auth/request-join', (req: TenantRequest, res: Response) => {
-    const user = req.user || db.users[0];
-    const { company_id, reason } = req.body || {};
+    const { company_id, reason, name, email, department } = req.body || {};
     const targetCompanyId = company_id || req.companyId || (db.companies[0]?.id);
 
+    let targetUser: User | undefined;
+    if (email && String(email).trim()) {
+      const cleanEmail = String(email).trim().toLowerCase();
+      targetUser = db.users.find((u) => u.email.toLowerCase() === cleanEmail);
+      if (!targetUser) {
+        targetUser = {
+          id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          auth_user_id: `google-oauth2|${Date.now()}`,
+          email: cleanEmail,
+          name: name ? String(name).trim() : cleanEmail.split('@')[0],
+          department: department || '신규 신청',
+          status: 'PENDING',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          is_system_admin: false,
+          is_super_admin: false,
+        };
+        db.users.push(targetUser);
+      } else {
+        if (name && (!targetUser.name || targetUser.name === targetUser.email)) {
+          targetUser.name = String(name).trim();
+        }
+      }
+    } else {
+      targetUser = req.user || db.users[0];
+    }
+
     const existing = db.userCompanyRoles.find(
-      (r) => r.user_id === user.id && r.company_id === targetCompanyId
+      (r) => r.user_id === targetUser!.id && r.company_id === targetCompanyId
     );
 
     if (existing) {
       existing.status = 'PENDING';
+      (existing as any).reason = reason || (existing as any).reason;
       existing.updated_at = new Date().toISOString();
     } else {
       db.userCompanyRoles.push({
-        id: `ucr_${Date.now()}`,
-        user_id: user.id,
+        id: `ucr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        user_id: targetUser.id,
         company_id: targetCompanyId,
         role_id: 'VIEWER',
         status: 'PENDING',
+        reason: reason || '',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      });
+      } as any);
     }
 
     db.addAuditLog({
       company_id: targetCompanyId,
-      user_id: user.id,
-      user_name: user.name,
+      user_id: targetUser.id,
+      user_name: targetUser.name,
       action: 'CREATE',
       entity_type: 'USER_COMPANY_ROLE_REQUEST',
-      entity_id: user.id,
-      after_data: { reason, status: 'PENDING' },
+      entity_id: targetUser.id,
+      after_data: { name: targetUser.name, email: targetUser.email, reason, status: 'PENDING', company_id: targetCompanyId },
       ip_address: req.ip,
       user_agent: req.headers['user-agent'],
     });
 
-    res.json({ success: true, message: '회사 가입 신청이 정상적으로 접수되었습니다.' });
+    res.json({
+      success: true,
+      message: '회사 소속 가입 신청이 정상 접수되었습니다. 관리자 승인 후 권한이 부여됩니다.',
+    });
   });
 
   // Companies List
@@ -322,8 +357,12 @@ async function startServer() {
     });
   });
 
-  // Create Company (Super Admin / Admin)
+  // Create Company (Super Admin only)
   app.post('/api/v1/companies', (req: TenantRequest, res: Response) => {
+    if (!req.isSuperAdmin) {
+      return res.status(403).json({ error: '회사(법인) 등록은 최고관리자만 수행할 수 있습니다.' });
+    }
+
     const { company_code, company_name, business_number, representative_name, address, phone, email } = req.body;
     if (!company_code || !company_name) {
       return res.status(400).json({ error: '회사 코드와 회사명은 필수입니다.' });
@@ -1480,6 +1519,7 @@ async function startServer() {
       roles: db.userCompanyRoles,
       companies: db.companies,
       all_roles: db.roles,
+      team_roles: db.userTeamRoles,
     });
   });
 
@@ -1489,6 +1529,11 @@ async function startServer() {
       return res.status(400).json({ error: 'user_id, company_id, role_id는 필수입니다.' });
     }
 
+    const callerRole = req.userRole?.role_id;
+    if (!req.isSuperAdmin && callerRole !== 'ORG_ADMIN' && callerRole !== 'ADMIN' && callerRole !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: '사용자 역할 및 권한 배정 권한이 없습니다.' });
+    }
+
     const existingIdx = db.userCompanyRoles.findIndex(
       (r) => r.user_id === user_id && r.company_id === company_id
     );
@@ -1496,6 +1541,7 @@ async function startServer() {
     if (existingIdx !== -1) {
       const beforeRole = db.userCompanyRoles[existingIdx].role_id;
       db.userCompanyRoles[existingIdx].role_id = role_id;
+      db.userCompanyRoles[existingIdx].status = 'ACTIVE';
       db.userCompanyRoles[existingIdx].updated_at = new Date().toISOString();
 
       db.addAuditLog({
@@ -1534,6 +1580,207 @@ async function startServer() {
     });
 
     res.status(201).json({ role: newRole });
+  });
+
+  // Admin: Update Custom Permissions for User-Company Role (A가 B에게 특정 메뉴 권한 허용/제한)
+  app.put('/api/v1/admin/user-company-roles/:id/permissions', (req: TenantRequest, res: Response) => {
+    const callerRole = req.userRole?.role_id;
+    if (!req.isSuperAdmin && callerRole !== 'ORG_ADMIN' && callerRole !== 'ADMIN' && callerRole !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: '개별 메뉴 권한 조정 권한이 없습니다.' });
+    }
+
+    const roleRecord = db.userCompanyRoles.find((r) => r.id === req.params.id);
+    if (!roleRecord) {
+      return res.status(404).json({ error: '해당 권한 레코드를 찾을 수 없습니다.' });
+    }
+
+    const { grant = [], revoke = [] } = req.body || {};
+    roleRecord.custom_permissions = { grant, revoke };
+    roleRecord.updated_at = new Date().toISOString();
+
+    db.addAuditLog({
+      company_id: roleRecord.company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'UPDATE',
+      entity_type: 'USER_ROLE',
+      entity_id: roleRecord.user_id,
+      after_data: { grant, revoke },
+    });
+
+    res.json({ success: true, role: roleRecord });
+  });
+
+  // Admin: Team Role Assignment
+  app.post('/api/v1/admin/user-team-roles', (req: TenantRequest, res: Response) => {
+    const { user_id, team_id, company_id, role_id } = req.body;
+    if (!user_id || !team_id || !company_id || !role_id) {
+      return res.status(400).json({ error: 'user_id, team_id, company_id, role_id가 필요합니다.' });
+    }
+
+    const newTeamRole = {
+      id: `utr_${Date.now()}`,
+      user_id,
+      team_id,
+      role_id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    db.userTeamRoles.push(newTeamRole);
+
+    res.status(201).json({ team_role: newTeamRole });
+  });
+
+  app.delete('/api/v1/admin/user-team-roles/:id', (req: TenantRequest, res: Response) => {
+    const idx = db.userTeamRoles.findIndex((utr) => utr.id === req.params.id);
+    if (idx !== -1) {
+      db.userTeamRoles.splice(idx, 1);
+    }
+    res.json({ success: true });
+  });
+
+  // Admin: Get Join Requests
+  app.get('/api/v1/admin/join-requests', (req: TenantRequest, res: Response) => {
+    const compId = req.companyId;
+    const pendingRoles = db.userCompanyRoles.filter(
+      (r) => r.status === 'PENDING' && (req.isSuperAdmin || !compId || r.company_id === compId)
+    );
+
+    const requests = pendingRoles.map((r) => {
+      const u = db.users.find((user) => user.id === r.user_id);
+      const c = db.companies.find((comp) => comp.id === r.company_id);
+      return {
+        id: r.id,
+        role_record_id: r.id,
+        user_id: r.user_id,
+        user_name: u?.name || '신청자',
+        user_email: u?.email || '',
+        company_id: r.company_id,
+        company_name: c?.company_name || '소속 회사',
+        company_code: c?.company_code || '',
+        reason: (r as any).reason || '회사 소속 가입 및 업무 권한 요청',
+        status: r.status,
+        created_at: r.created_at,
+        suggested_role: r.role_id || 'VIEWER',
+      };
+    });
+
+    res.json({ requests });
+  });
+
+  // Admin: Approve Join Request & Assign Role
+  app.post('/api/v1/admin/join-requests/:id/approve', (req: TenantRequest, res: Response) => {
+    const roleId = req.userRole?.role_id;
+    if (!req.isSuperAdmin && roleId !== 'ORG_ADMIN' && roleId !== 'SUPER_ADMIN' && roleId !== 'ADMIN') {
+      return res.status(403).json({ error: '가입 승인 및 권한 부여 권한이 없습니다.' });
+    }
+
+    const { role_id = 'VIEWER' } = req.body || {};
+    const reqRecord = db.userCompanyRoles.find((r) => r.id === req.params.id);
+    if (!reqRecord) {
+      return res.status(404).json({ error: '가입 신청 건을 찾을 수 없습니다.' });
+    }
+
+    reqRecord.status = 'ACTIVE';
+    reqRecord.role_id = role_id;
+    reqRecord.updated_at = new Date().toISOString();
+
+    const targetUser = db.users.find((u) => u.id === reqRecord.user_id);
+    if (targetUser && targetUser.status === 'PENDING') {
+      targetUser.status = 'ACTIVE';
+      targetUser.updated_at = new Date().toISOString();
+    }
+
+    db.addAuditLog({
+      company_id: reqRecord.company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'APPROVE',
+      entity_type: 'USER_ROLE',
+      entity_id: reqRecord.user_id,
+      after_data: { role_id, status: 'ACTIVE', applicant: targetUser?.name },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({
+      success: true,
+      message: '가입 승인 및 권한 부여가 완료되었습니다.',
+      role: reqRecord,
+      user: targetUser,
+    });
+  });
+
+  // Admin: Reject Join Request
+  app.post('/api/v1/admin/join-requests/:id/reject', (req: TenantRequest, res: Response) => {
+    const roleId = req.userRole?.role_id;
+    if (!req.isSuperAdmin && roleId !== 'ORG_ADMIN' && roleId !== 'SUPER_ADMIN' && roleId !== 'ADMIN') {
+      return res.status(403).json({ error: '가입 반려 권한이 없습니다.' });
+    }
+
+    const reqRecord = db.userCompanyRoles.find((r) => r.id === req.params.id);
+    if (!reqRecord) {
+      return res.status(404).json({ error: '가입 신청 건을 찾을 수 없습니다.' });
+    }
+
+    reqRecord.status = 'SUSPENDED';
+    reqRecord.updated_at = new Date().toISOString();
+
+    db.addAuditLog({
+      company_id: reqRecord.company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'SUSPEND',
+      entity_type: 'USER_ROLE',
+      entity_id: reqRecord.user_id,
+      after_data: { status: 'SUSPENDED' },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, message: '가입 신청이 반려되었습니다.' });
+  });
+
+  // Admin: Update User Status
+  app.put('/api/v1/admin/users/:id/status', (req: TenantRequest, res: Response) => {
+    const roleId = req.userRole?.role_id;
+    if (!req.isSuperAdmin && roleId !== 'ORG_ADMIN' && roleId !== 'SUPER_ADMIN' && roleId !== 'ADMIN') {
+      return res.status(403).json({ error: '사용자 상태 변경 권한이 없습니다.' });
+    }
+
+    const { status } = req.body;
+    const targetUser = db.users.find((u) => u.id === req.params.id);
+    if (!targetUser) {
+      return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+    }
+
+    const prevStatus = targetUser.status;
+    targetUser.status = status;
+    targetUser.updated_at = new Date().toISOString();
+
+    if (status === 'ACTIVE') {
+      db.userCompanyRoles
+        .filter((r) => r.user_id === targetUser.id && r.status === 'PENDING')
+        .forEach((r) => {
+          r.status = 'ACTIVE';
+          r.updated_at = new Date().toISOString();
+        });
+    }
+
+    db.addAuditLog({
+      company_id: req.companyId || 'system',
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'UPDATE',
+      entity_type: 'USER_STATUS',
+      entity_id: targetUser.id,
+      before_data: { status: prevStatus },
+      after_data: { status },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, user: targetUser });
   });
 
   // Vite middleware setup

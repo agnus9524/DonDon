@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { PermissionCode } from '../types';
 import { ROLE_PERMISSIONS } from '../data/initialData';
 import {
@@ -20,6 +20,13 @@ import {
   FolderGit2,
   Lock,
   X,
+  SlidersHorizontal,
+  CreditCard,
+  Building,
+  Code2,
+  ChevronDown,
+  ChevronRight,
+  UserCog,
 } from 'lucide-react';
 
 export type NavSection =
@@ -29,11 +36,47 @@ export type NavSection =
   | 'banks'
   | 'reports'
   | 'admin-companies'
+  | 'admin-accounting-settings'
+  | 'admin-accounting-accounts'
+  | 'admin-accounting-cards'
+  | 'admin-accounting-cash-banks'
+  | 'admin-accounting-units'
+  | 'admin-accounting-codes'
+  | 'admin-user-settings'
   | 'admin-teams'
-  | 'admin-accounts'
   | 'admin-users'
+  | 'admin-permissions'
   | 'admin-vendors'
-  | 'admin-permissions';
+  | 'admin-accounts';
+
+export interface AccountingSubMenuItem {
+  id: NavSection;
+  label: string;
+  icon: any;
+  badge?: string;
+}
+
+export const ACCOUNTING_SUB_MENUS: AccountingSubMenuItem[] = [
+  { id: 'admin-accounting-accounts', label: '계정과목관리', icon: Layers },
+  { id: 'admin-accounting-cards', label: '신용카드관리', icon: CreditCard },
+  { id: 'admin-accounting-cash-banks', label: '현금계좌관리', icon: Landmark },
+  { id: 'admin-accounting-units', label: '회계단위관리', icon: Building },
+  { id: 'admin-accounting-codes', label: '코드종합관리', icon: Code2, badge: '관리' },
+];
+
+export interface UserSubMenuItem {
+  id: NavSection;
+  label: string;
+  icon: any;
+  badge?: string;
+  permission: PermissionCode;
+}
+
+export const USER_SUB_MENUS: UserSubMenuItem[] = [
+  { id: 'admin-teams', label: '부서관리', icon: FolderGit2, permission: 'team.view' },
+  { id: 'admin-users', label: '권한관리', icon: Users, permission: 'user.view' },
+  { id: 'admin-permissions', label: '회계권한관리', icon: Shield, permission: 'role.manage' },
+];
 
 interface SidebarProps {
   currentSection: NavSection;
@@ -56,13 +99,18 @@ const NAV_ITEMS: { id: NavSection; label: string; icon: any; permission: Permiss
   { id: 'reports', label: '결산보고서 (월·분기·연)', icon: FileSpreadsheet, permission: 'report.monthly' },
 ];
 
-const ADMIN_ITEMS: { id: NavSection; label: string; icon: any; permission: PermissionCode; highlight?: boolean }[] = [
+const ADMIN_ITEMS: {
+  id: NavSection;
+  label: string;
+  icon: any;
+  permission: PermissionCode;
+  highlight?: boolean;
+  hasChildren?: boolean;
+}[] = [
   { id: 'admin-companies', label: '회사 관리 (법인)', icon: Building2, permission: 'company.manage', highlight: true },
-  { id: 'admin-teams', label: '팀 · 부서 관리', icon: FolderGit2, permission: 'team.view' },
-  { id: 'admin-accounts', label: '계정과목 관리', icon: Layers, permission: 'account.manage' },
-  { id: 'admin-users', label: '사용자 · 권한 관리', icon: Users, permission: 'user.view' },
+  { id: 'admin-accounting-settings', label: '회계설정', icon: SlidersHorizontal, permission: 'account.manage', hasChildren: true },
+  { id: 'admin-user-settings', label: '사용자설정', icon: UserCog, permission: 'user.view', hasChildren: true },
   { id: 'admin-vendors', label: '거래처 관리', icon: Briefcase, permission: 'vendor.manage' },
-  { id: 'admin-permissions', label: '권한 설정 (역할별)', icon: Shield, permission: 'role.manage' },
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -78,12 +126,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const activePerms = permissions || new Set(ROLE_PERMISSIONS[userRole] || ROLE_PERMISSIONS.SUPER_ADMIN || []);
   const canAdmin = isSuperAdmin || userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'ORG_ADMIN';
   const hasPermission = (code: PermissionCode) =>
-    isSuperAdmin || userRole === 'SUPER_ADMIN' || userRole === 'ADMIN' || activePerms.has(code);
+    isSuperAdmin || userRole === 'SUPER_ADMIN' || userRole === 'ADMIN' || userRole === 'ORG_ADMIN' || activePerms.has(code);
 
   const visibleNavItems = NAV_ITEMS.filter((item) => hasPermission(item.permission));
-  const visibleAdminItems = ADMIN_ITEMS.filter(
-    (item) => item.id === 'admin-companies' || hasPermission(item.permission)
-  );
+  const visibleAdminItems = ADMIN_ITEMS.filter((item) => {
+    // 회사 관리(법인)는 최고관리자만 권한이 있고 메뉴가 보임
+    if (item.id === 'admin-companies') {
+      return isSuperAdmin;
+    }
+    return hasPermission(item.permission);
+  });
+
+  const isAccountingSection =
+    currentSection === 'admin-accounting-settings' ||
+    currentSection === 'admin-accounts' ||
+    currentSection === 'admin-accounting-accounts' ||
+    currentSection === 'admin-accounting-cards' ||
+    currentSection === 'admin-accounting-cash-banks' ||
+    currentSection === 'admin-accounting-units' ||
+    currentSection === 'admin-accounting-codes';
+
+  const isUserSection =
+    currentSection === 'admin-user-settings' ||
+    currentSection === 'admin-teams' ||
+    currentSection === 'admin-users' ||
+    currentSection === 'admin-permissions';
+
+  const [isAccountingOpen, setIsAccountingOpen] = useState(true);
+  const [isUserOpen, setIsUserOpen] = useState(true);
+
+  useEffect(() => {
+    if (isAccountingSection) {
+      setIsAccountingOpen(true);
+    }
+  }, [isAccountingSection]);
+
+  useEffect(() => {
+    if (isUserSection) {
+      setIsUserOpen(true);
+    }
+  }, [isUserSection]);
 
   const handleItemClick = (sectionId: NavSection) => {
     onSelectSection(sectionId);
@@ -155,7 +237,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={item.id}
                 onClick={() => handleItemClick(item.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
                   isActive
                     ? 'bg-slate-900 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -179,29 +261,176 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 )}
               </div>
 
-              {visibleAdminItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = currentSection === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => handleItemClick(item.id)}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
-                      isActive
-                        ? 'bg-indigo-50 text-indigo-900 font-semibold ring-1 ring-indigo-200'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Icon className={`w-4 h-4 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
-                    <span className="truncate">{item.label}</span>
-                    {item.highlight && (
-                      <span className="ml-auto text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">
-                        ★
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+              <div className="space-y-1">
+                {visibleAdminItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = currentSection === item.id;
+
+                  // 회계설정: 하위 서브메뉴(계정과목, 신용카드, 현금계좌, 회계단위, 코드종합관리) 아코디언 렌더링
+                  if (item.id === 'admin-accounting-settings') {
+                    return (
+                      <div key={item.id} className="space-y-0.5">
+                        <button
+                          onClick={() => {
+                            setIsAccountingOpen((prev) => !prev);
+                            handleItemClick('admin-accounting-settings');
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
+                            isAccountingSection
+                              ? 'bg-indigo-50/80 text-indigo-950 font-bold ring-1 ring-indigo-200/70'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <Icon className={`w-4 h-4 shrink-0 ${isAccountingSection ? 'text-indigo-600' : 'text-slate-400'}`} />
+                            <span className="truncate">{item.label}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.2 rounded font-bold">
+                              설정
+                            </span>
+                            {isAccountingOpen ? (
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                            ) : (
+                              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                            )}
+                          </div>
+                        </button>
+
+                        {/* 회계설정 하위 메뉴 (계정과목관리, 신용카드관리, 현금계좌관리, 회계단위관리, 코드종합관리) */}
+                        {isAccountingOpen && (
+                          <div className="pl-4 ml-3 border-l-2 border-indigo-200/80 space-y-0.5 pt-0.5 pb-1 animate-in fade-in duration-150">
+                            {ACCOUNTING_SUB_MENUS.map((sub) => {
+                              const SubIcon = sub.icon;
+                              const isSubActive =
+                                currentSection === sub.id ||
+                                (sub.id === 'admin-accounting-accounts' && (currentSection === 'admin-accounts' || currentSection === 'admin-accounting-settings'));
+
+                              return (
+                                <button
+                                  key={sub.id}
+                                  onClick={() => handleItemClick(sub.id)}
+                                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                                    isSubActive
+                                      ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                                      : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/90'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0 truncate">
+                                    <SubIcon className={`w-3.5 h-3.5 shrink-0 ${isSubActive ? 'text-amber-300' : 'text-slate-400'}`} />
+                                    <span className="truncate">{sub.label}</span>
+                                  </div>
+                                  {sub.badge && (
+                                    <span
+                                      className={`text-[9px] px-1 py-0.2 rounded font-bold ${
+                                        isSubActive ? 'bg-indigo-700 text-amber-200' : 'bg-slate-100 text-slate-600'
+                                      }`}
+                                    >
+                                      {sub.badge}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  // 사용자설정: 하위 서브메뉴(부서관리, 권한관리, 회계권한관리) 아코디언 렌더링
+                  if (item.id === 'admin-user-settings') {
+                    return (
+                      <div key={item.id} className="space-y-0.5">
+                        <button
+                          onClick={() => {
+                            setIsUserOpen((prev) => !prev);
+                            handleItemClick('admin-user-settings');
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
+                            isUserSection
+                              ? 'bg-blue-50/80 text-blue-950 font-bold ring-1 ring-blue-200/70'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <Icon className={`w-4 h-4 shrink-0 ${isUserSection ? 'text-blue-600' : 'text-slate-400'}`} />
+                            <span className="truncate">{item.label}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded font-bold">
+                              설정
+                            </span>
+                            {isUserOpen ? (
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                            ) : (
+                              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                            )}
+                          </div>
+                        </button>
+
+                        {/* 사용자설정 하위 메뉴 (부서관리, 권한관리, 회계권한관리) */}
+                        {isUserOpen && (
+                          <div className="pl-4 ml-3 border-l-2 border-blue-200/80 space-y-0.5 pt-0.5 pb-1 animate-in fade-in duration-150">
+                            {USER_SUB_MENUS.filter((sub) => hasPermission(sub.permission)).map((sub) => {
+                              const SubIcon = sub.icon;
+                              const isSubActive =
+                                currentSection === sub.id ||
+                                (sub.id === 'admin-teams' && currentSection === 'admin-user-settings');
+
+                              return (
+                                <button
+                                  key={sub.id}
+                                  onClick={() => handleItemClick(sub.id)}
+                                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                                    isSubActive
+                                      ? 'bg-blue-600 text-white font-bold shadow-xs'
+                                      : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/90'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0 truncate">
+                                    <SubIcon className={`w-3.5 h-3.5 shrink-0 ${isSubActive ? 'text-amber-300' : 'text-slate-400'}`} />
+                                    <span className="truncate">{sub.label}</span>
+                                  </div>
+                                  {sub.badge && (
+                                    <span
+                                      className={`text-[9px] px-1 py-0.2 rounded font-bold ${
+                                        isSubActive ? 'bg-blue-700 text-amber-200' : 'bg-slate-100 text-slate-600'
+                                      }`}
+                                    >
+                                      {sub.badge}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => handleItemClick(item.id)}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
+                        isActive
+                          ? 'bg-indigo-50 text-indigo-900 font-semibold ring-1 ring-indigo-200'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
+                      <span className="truncate">{item.label}</span>
+                      {item.highlight && (
+                        <span className="ml-auto text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">
+                          ★
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

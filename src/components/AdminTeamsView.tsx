@@ -65,23 +65,23 @@ export const AdminTeamsView: React.FC<AdminTeamsViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">팀 · 부서 관리 (Teams)</h1>
+            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">부서관리</h1>
             <span className="text-xs bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded border border-indigo-200">
               company: {currentCompany.company_code}
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            {currentCompany.company_name} 내부의 조직 부서 및 사업팀을 관리합니다.
+            {currentCompany.company_name} 내부의 조직 부서 및 사업팀을 등록·수정·관리합니다.
           </p>
         </div>
 
         {userRole !== 'VIEWER' && (
           <button
             onClick={() => setIsModalOpen(true)}
-            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors self-start sm:self-auto"
+            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors self-start sm:self-auto cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>+ 팀(부서) 추가</span>
+            <span>+ 새 부서(팀) 추가</span>
           </button>
         )}
       </div>

@@ -72,6 +72,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   });
   const [savingPerm, setSavingPerm] = useState(false);
   const [statusUpdatingId, setStatusUpdatingId] = useState<string | null>(null);
+  const [pendingRoleSelection, setPendingRoleSelection] = useState<Record<string, RoleType>>({});
 
   const companyMap = new Map(companies.map((c) => [c.id, c.company_name]));
   const teamMap = new Map(teams.map((t) => [t.id, t.team_name]));
@@ -103,9 +104,12 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
     }
   };
 
-  const handleApprove = async (userId: string) => {
+  const handleApprove = async (userId: string, companyId?: string) => {
     try {
       setStatusUpdatingId(userId);
+      const roleToAssign = pendingRoleSelection[userId] || 'VIEWER';
+      const targetComp = companyId || targetCompanyId;
+      await onAssignRole(userId, targetComp, roleToAssign);
       if (onUpdateUserStatus) {
         await onUpdateUserStatus(userId, 'ACTIVE');
       }
@@ -193,64 +197,132 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">사용자 및 권한 관리</h1>
+            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">권한관리</h1>
             <span className="text-xs bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded border border-indigo-200">
               user_company_roles · user_team_roles
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            새 사용자는 승인 대기 상태로 생성되며, 관리자가 승인해야 로그인 후 실제 화면에 접근할 수 있습니다.
+            소속 회사의 사용자 승인, 회사 관리자(A) 및 회계담당자(B)의 권한 부여 및 메뉴별 개별 권한을 설정합니다.
           </p>
         </div>
 
         <button
           onClick={() => setIsModalOpen(true)}
-          className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors self-start sm:self-auto"
+          className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors self-start sm:self-auto cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           <span>+ 회사 권한 부여</span>
         </button>
       </div>
 
-      {/* Pending approval queue (UI 목업 01/13) */}
+      {/* Role Delegation Architecture Callout (최고관리자 -> A사용자 모든 권한 -> B사용자 회계업무) */}
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-800">
+        <div className="flex items-start gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-amber-400/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0">
+            <Shield className="w-5 h-5" />
+          </div>
+          <div className="space-y-1.5 text-xs">
+            <div className="font-bold text-white text-sm flex items-center gap-2">
+              <span>법인 권한 위임 체계 안내</span>
+              <span className="text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/30 px-1.5 py-0.2 rounded font-semibold">
+                역할 기반 접근제어 (RBAC)
+              </span>
+            </div>
+            <div className="text-slate-300 leading-relaxed space-y-1">
+              <div>
+                <strong className="text-amber-300">1. 최고관리자 (Super Admin):</strong> 전체 회사(법인) 관리 권한을 독점하며, 특정 사용자(A)에게 <span className="text-emerald-300 font-bold">[회사 대표관리자 (모든 권한)]</span>을 부여합니다.
+              </div>
+              <div>
+                <strong className="text-indigo-300">2. A 사용자 (회사 대표관리자):</strong> 소속 회사의 회계전표, 예산, 은행계좌, 팀, 계정과목, 사용자 권한을 전권 제어합니다. (단, 타 법인 및 최고관리자 전용 법인 관리 메뉴는 미노출)
+              </div>
+              <div>
+                <strong className="text-teal-300">3. B 사용자 (회계담당자):</strong> A 사용자로부터 <span className="text-teal-300 font-bold">[회계담당자 / 본사 총괄회계]</span> 또는 개별 메뉴 권한을 부여받아 전표 작성·승인·결산 등 회계업무를 수행합니다.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Pending approval queue */}
       {pendingUsers.length > 0 && (
         <div className="bg-white rounded-xl border border-amber-200 shadow-2xs overflow-hidden">
-          <div className="p-4 border-b border-amber-100 bg-amber-50/60 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-amber-600" />
-            <h2 className="text-sm font-bold text-amber-900">승인 대기 중인 사용자 ({pendingUsers.length}명)</h2>
+          <div className="p-4 border-b border-amber-100 bg-amber-50/60 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-600" />
+              <h2 className="text-sm font-bold text-amber-900">신규 가입 신청 및 승인 대기자 ({pendingUsers.length}명)</h2>
+            </div>
+            <span className="text-[11px] text-amber-800 font-medium">
+              인적사항 및 신청 사유 확인 후 권한을 배정하세요.
+            </span>
           </div>
           <div className="divide-y divide-slate-100">
-            {pendingUsers.map((u) => (
-              <div key={u.id} className="p-4 flex items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-sm shrink-0">
-                    {u.name.slice(0, 1)}
+            {pendingUsers.map((u) => {
+              const pendingRole = userRoles.find((r) => r.user_id === u.id && r.status === 'PENDING');
+              const targetCompId = pendingRole?.company_id || currentCompany.id;
+              const targetCompName = companyMap.get(targetCompId) || currentCompany.company_name;
+              const selectedRole = pendingRoleSelection[u.id] || (pendingRole?.role_id as RoleType) || 'VIEWER';
+
+              return (
+                <div key={u.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-sm shrink-0 shadow-2xs">
+                      {u.name.slice(0, 1)}
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-slate-900 text-sm">{u.name}</span>
+                        <span className="text-slate-500 font-mono text-[11px]">{u.email}</span>
+                        <span className="text-[10px] bg-indigo-50 text-indigo-700 font-semibold px-2 py-0.5 rounded border border-indigo-200">
+                          신청 법인: {targetCompName}
+                        </span>
+                      </div>
+                      {pendingRole?.reason && (
+                        <div className="text-[11px] text-slate-700 bg-slate-50 border border-slate-200/80 rounded-lg px-2.5 py-1">
+                          신청 사유: {pendingRole.reason}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <div className="font-bold text-slate-900 text-sm">{u.name}</div>
-                    <div className="text-slate-500 font-mono text-[11px]">{u.email}</div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+                    <span className="text-slate-600 font-bold whitespace-nowrap">부여할 권한:</span>
+                    <select
+                      value={selectedRole}
+                      onChange={(e) =>
+                        setPendingRoleSelection((prev) => ({ ...prev, [u.id]: e.target.value as RoleType }))
+                      }
+                      disabled={statusUpdatingId === u.id}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-900 bg-white focus:outline-none focus:border-indigo-600"
+                    >
+                      <option value="VIEWER">일반 열람자</option>
+                      <option value="ACCOUNTANT">회계담당자</option>
+                      <option value="TEAM_ACCOUNTANT">팀 회계담당자</option>
+                      <option value="TEAM_MANAGER">팀 관리자 (부서장)</option>
+                      <option value="HQ_ACCOUNTANT">본사 총괄회계</option>
+                      <option value="ORG_ADMIN">회사 대표관리자 (모든 권한)</option>
+                    </select>
+
+                    <button
+                      onClick={() => handleApprove(u.id, targetCompId)}
+                      disabled={statusUpdatingId === u.id}
+                      className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1 shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{statusUpdatingId === u.id ? '처리 중...' : '권한부여 및 승인'}</span>
+                    </button>
+                    <button
+                      onClick={() => handleToggleSuspend(u)}
+                      disabled={statusUpdatingId === u.id}
+                      className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 font-semibold flex items-center gap-1 transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      <Ban className="w-3.5 h-3.5" />
+                      <span>거부</span>
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleApprove(u.id)}
-                    disabled={statusUpdatingId === u.id}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    승인
-                  </button>
-                  <button
-                    onClick={() => handleToggleSuspend(u)}
-                    disabled={statusUpdatingId === u.id}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 font-semibold flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <Ban className="w-3.5 h-3.5" />
-                    거부
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -624,11 +696,13 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                   onChange={(e) => setTargetRole(e.target.value as RoleType)}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 font-medium"
                 >
-                  <option value="ADMIN">회사 관리자 (ADMIN - 전표 작성, 승인, 팀/사용자/계정 관리)</option>
-                  <option value="ACCOUNTANT">회계담당자 (ACCOUNTANT - 회사 전체 전표 작성 및 조회)</option>
-                  <option value="TEAM_MANAGER">팀장 (TEAM_MANAGER - 팀별 배정, 확정 권한 포함)</option>
-                  <option value="TEAM_ACCOUNTANT">팀 회계담당자 (TEAM_ACCOUNTANT - 팀별 배정)</option>
-                  <option value="VIEWER">조회자 (VIEWER - 보고서 및 전표 조회만 가능)</option>
+                  <option value="ORG_ADMIN">회사 대표관리자 (ORG_ADMIN - 회사 모든 권한: 회계/예산/계좌/팀/사용자/마감 전권)</option>
+                  <option value="ADMIN">회사 관리자 (ADMIN - 회사 전체 관리 권한)</option>
+                  <option value="HQ_ACCOUNTANT">본사 총괄회계 (HQ_ACCOUNTANT - 회사 전체 전표 작성/승인, 결산, 은행연동)</option>
+                  <option value="ACCOUNTANT">회계담당자 (ACCOUNTANT - 전표 작성, 회계전표 및 은행내역 업무)</option>
+                  <option value="TEAM_MANAGER">팀 관리자 (TEAM_MANAGER - 팀별 전표 및 예산 관리)</option>
+                  <option value="TEAM_ACCOUNTANT">팀 회계담당자 (TEAM_ACCOUNTANT - 팀 전표 작성)</option>
+                  <option value="VIEWER">일반 열람자 (VIEWER - 장부 및 결산보고서 조회 전용)</option>
                 </select>
                 {(targetRole === 'TEAM_MANAGER' || targetRole === 'TEAM_ACCOUNTANT') && (
                   <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 mt-1.5">

@@ -4,45 +4,27 @@
  */
 
 import React, { useState } from 'react';
-import { Shield, Building2, User, CheckCircle, ArrowRight, Lock, Mail, Sparkles, Building, Search, PlusCircle } from 'lucide-react';
-import { Company, User as UserType } from '../types';
+import { Building2, CheckCircle, ArrowRight, Sparkles, Search } from 'lucide-react';
+import { Company } from '../types';
 
 interface LoginViewProps {
   onLogin: (emailOrId: string) => Promise<void>;
   companies: Company[];
-  onRequestJoinCompany: (companyId: string, reason: string) => Promise<void>;
+  onRequestJoinCompany: (payload: { company_id: string; reason: string; name: string; email: string }) => Promise<void>;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLogin, companies, onRequestJoinCompany }) => {
-  const [emailInput, setEmailInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Join company modal state for new users
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
-  const [selectedJoinCompanyId, setSelectedJoinCompanyId] = useState(companies[0]?.id || '');
+  const [selectedJoinCompanyId, setSelectedJoinCompanyId] = useState(companies[0]?.id || 'comp_daechul');
   const [joinReason, setJoinReason] = useState('');
   const [joinEmail, setJoinEmail] = useState('');
   const [joinName, setJoinName] = useState('');
   const [joinSuccess, setJoinSuccess] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-
-  const handleCustomLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!emailInput.trim()) {
-      setErrorMsg('이메일 또는 사용자 아이디를 입력해주세요.');
-      return;
-    }
-    try {
-      setIsLoading(true);
-      setErrorMsg(null);
-      await onLogin(emailInput.trim());
-    } catch (err: any) {
-      setErrorMsg(err.message || '로그인에 실패했습니다.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleQuickLogin = async (email: string) => {
     try {
@@ -58,15 +40,23 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, companies, onRequ
 
   const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!joinEmail || !joinName) {
+    if (!joinEmail.trim() || !joinName.trim()) {
       alert('이름과 이메일을 입력해주세요.');
       return;
     }
     try {
-      await onRequestJoinCompany(selectedJoinCompanyId, joinReason);
+      setIsLoading(true);
+      await onRequestJoinCompany({
+        company_id: selectedJoinCompanyId || companies[0]?.id,
+        reason: joinReason,
+        name: joinName.trim(),
+        email: joinEmail.trim(),
+      });
       setJoinSuccess(true);
     } catch (err: any) {
       alert(err.message || '가입 신청 실패');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -128,7 +118,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, companies, onRequ
                 d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.23 0 3.17 2.68 1.2 6.58l4.08 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
               />
             </svg>
-            <span className="text-sm sm:text-base font-bold">Google 계정으로 간편 로그인 (최고관리자)</span>
+            <span className="text-sm sm:text-base font-bold text-slate-800">Google 계정으로 간편 로그인</span>
             <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-transform" />
           </button>
         </div>
@@ -234,42 +224,31 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, companies, onRequ
           </button>
         </div>
 
-        {/* 3. Custom Email Login Form */}
-        <form onSubmit={handleCustomLogin} className="space-y-3 pt-2 border-t border-slate-100">
-          <label className="block text-xs font-bold text-slate-700">이메일 계정으로 로그인</label>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Mail className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
-              <input
-                type="email"
-                required
-                value={emailInput}
-                onChange={(e) => setEmailInput(e.target.value)}
-                placeholder="example@company.com 입력"
-                className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-semibold text-slate-900 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20"
-              />
+        {/* 3. Company Join Request for New Users (처음 오셨나요? 확대 및 강조) */}
+        <div className="mt-8 p-5 sm:p-6 bg-gradient-to-br from-indigo-50/90 via-sky-50/40 to-amber-50/70 rounded-2xl border-2 border-indigo-200 shadow-sm transition-all hover:border-indigo-400">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-600 text-white text-[11px] font-black uppercase tracking-wider">
+                <Sparkles className="w-3 h-3 text-amber-300" />
+                <span>신규 가입 안내</span>
+              </div>
+              <h3 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
+                처음 오셨나요?
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 font-medium leading-relaxed max-w-sm">
+                소속 회사(법인)를 검색하여 가입 신청을 하시면, 해당 회사의 대표관리자가 확인 후 권한을 부여해 드립니다.
+              </p>
             </div>
             <button
-              type="submit"
-              disabled={isLoading}
-              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs sm:text-sm shrink-0 shadow-sm transition-all flex items-center gap-1.5"
+              type="button"
+              onClick={() => setIsJoinModalOpen(true)}
+              className="w-full sm:w-auto px-5 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-extrabold text-sm sm:text-base flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all shrink-0 cursor-pointer"
             >
-              <span>로그인</span>
-              <ArrowRight className="w-4 h-4" />
+              <Building2 className="w-5 h-5 text-amber-300 shrink-0" />
+              <span>소속 선택 및 가입 신청하기</span>
+              <ArrowRight className="w-4 h-4 shrink-0" />
             </button>
           </div>
-        </form>
-
-        {/* 4. Company Join Request for New Users */}
-        <div className="mt-6 pt-4 border-t border-slate-100 text-center">
-          <button
-            type="button"
-            onClick={() => setIsJoinModalOpen(true)}
-            className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline inline-flex items-center gap-1"
-          >
-            <Building className="w-3.5 h-3.5" />
-            <span>처음 오셨나요? 회사 소속 선택 및 가입 신청하기</span>
-          </button>
         </div>
       </div>
 

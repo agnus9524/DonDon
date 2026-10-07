@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from './api/client';
 import {
   Company,
@@ -14,8 +14,12 @@ import {
   Vendor,
   Transaction,
   UserCompanyRole,
+  UserTeamRole,
+  PermissionCode,
   RoleType,
+  JoinRequest,
 } from './types';
+import { PERMISSION_DEFINITIONS, ROLE_PERMISSIONS } from './data/initialData';
 import { TopNavbar } from './components/TopNavbar';
 import { Sidebar, NavSection } from './components/Sidebar';
 import { CompanySelectorModal } from './components/CompanySelectorModal';
@@ -27,12 +31,14 @@ import { ReportsView } from './components/ReportsView';
 import { AdminCompanyView } from './components/AdminCompanyView';
 import { AdminTeamsView } from './components/AdminTeamsView';
 import { AdminAccountsView } from './components/AdminAccountsView';
+import { AdminAccountingSettingsView, AccountingSettingTab } from './components/AdminAccountingSettingsView';
+import { AdminUserSettingsView, UserSettingTab } from './components/AdminUserSettingsView';
 import { AdminUsersView } from './components/AdminUsersView';
 import { AdminVendorsView } from './components/AdminVendorsView';
 import { AdminPermissionsView } from './components/AdminPermissionsView';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { LoginView } from './components/LoginView';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, RefreshCw, Lock } from 'lucide-react';
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(api.isLoggedIn());
@@ -43,6 +49,8 @@ export default function App() {
   const [allCompanies, setAllCompanies] = useState<Company[]>([]);
   const [currentRole, setCurrentRole] = useState<string>('VIEWER');
   const [allUserRoles, setAllUserRoles] = useState<UserCompanyRole[]>([]);
+  const [teamRoles, setTeamRoles] = useState<UserTeamRole[]>([]);
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
 
   // Section navigation & Mobile state
   const [currentSection, setCurrentSection] = useState<NavSection>('dashboard');
@@ -63,9 +71,28 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleLogin = async (emailOrId: string) => {
-    await api.login(emailOrId);
-    setIsLoggedIn(true);
-    await loadInitialData();
+    setIsLoading(true);
+    try {
+      const loginData = await api.login(emailOrId);
+      if (loginData.user) {
+        setCurrentUser(loginData.user);
+        const comp = loginData.companies?.[0];
+        if (comp) {
+          api.setCompany(comp.id);
+          setCurrentCompany(comp);
+          setCurrentRole(comp.my_role || (loginData.is_super_admin ? 'SUPER_ADMIN' : 'VIEWER'));
+        }
+      }
+      setIsLoggedIn(true);
+      setIsCompanySelectorOpen(false);
+      setCurrentSection('dashboard');
+      await loadInitialData();
+    } catch (err: any) {
+      console.error('Login error:', err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleLogout = () => {
@@ -75,8 +102,41 @@ export default function App() {
     setCurrentCompany(null);
   };
 
-  const handleRequestJoinCompany = async (companyId: string, reason: string) => {
-    await api.requestJoinCompany(companyId, reason);
+  const handleRequestJoinCompany = async (payload: {
+    company_id: string;
+    reason: string;
+    name: string;
+    email: string;
+  }) => {
+    await api.requestJoinCompany(payload);
+  };
+
+  const handleApproveJoinRequest = async (requestId: string, roleId: string) => {
+    await api.approveJoinRequest(requestId, roleId);
+    const [reqs, adminData] = await Promise.all([
+      api.getJoinRequests(),
+      api.getAdminUsersAndRoles(),
+    ]);
+    setJoinRequests(reqs);
+    setAllUsers(adminData.users);
+    setAllUserRoles(adminData.roles);
+  };
+
+  const handleRejectJoinRequest = async (requestId: string) => {
+    await api.rejectJoinRequest(requestId);
+    const reqs = await api.getJoinRequests();
+    setJoinRequests(reqs);
+  };
+
+  const handleUpdateUserStatus = async (userId: string, status: 'ACTIVE' | 'SUSPENDED' | 'PENDING') => {
+    await api.updateUserStatus(userId, status);
+    const [reqs, adminData] = await Promise.all([
+      api.getJoinRequests(),
+      api.getAdminUsersAndRoles(),
+    ]);
+    setJoinRequests(reqs);
+    setAllUsers(adminData.users);
+    setAllUserRoles(adminData.roles);
   };
 
   // Load domain data for a given company
@@ -119,6 +179,17 @@ export default function App() {
       setAllUsers(adminData.users);
       setAllCompanies(adminData.companies);
       setAllUserRoles(adminData.roles);
+      if (adminData.team_roles) {
+        setTeamRoles(adminData.team_roles);
+      }
+
+      // 2-1. Fetch join requests
+      try {
+        const reqs = await api.getJoinRequests();
+        setJoinRequests(reqs);
+      } catch {
+        setJoinRequests([]);
+      }
 
       // 3. Resolve active company:
       const savedCompanyId = api.getCompanyId();
@@ -306,6 +377,37 @@ export default function App() {
     await api.assignUserCompanyRole(userId, companyId, role);
     const adminData = await api.getAdminUsersAndRoles();
     setAllUserRoles(adminData.roles);
+    if (adminData.team_roles) setTeamRoles(adminData.team_roles);
+  };
+
+  // Handler: Update Custom Permissions for User (A가 B에게 메뉴별 허용/제한 설정)
+  const handleUpdateCustomPermissions = async (
+    roleRecordId: string,
+    grant: PermissionCode[],
+    revoke: PermissionCode[]
+  ) => {
+    await api.updateCustomPermissions(roleRecordId, grant, revoke);
+    const adminData = await api.getAdminUsersAndRoles();
+    setAllUserRoles(adminData.roles);
+  };
+
+  // Handler: Assign Team Role
+  const handleAssignTeamRole = async (
+    userId: string,
+    teamId: string,
+    companyId: string,
+    role: RoleType
+  ) => {
+    await api.assignTeamRole(userId, teamId, companyId, role);
+    const adminData = await api.getAdminUsersAndRoles();
+    if (adminData.team_roles) setTeamRoles(adminData.team_roles);
+  };
+
+  // Handler: Remove Team Role
+  const handleRemoveTeamRole = async (id: string) => {
+    await api.removeTeamRole(id);
+    const adminData = await api.getAdminUsersAndRoles();
+    if (adminData.team_roles) setTeamRoles(adminData.team_roles);
   };
 
   // Handler: Add vendor
@@ -314,7 +416,35 @@ export default function App() {
     setVendors((prev) => [...prev, newVendor]);
   };
 
-  if (!isLoggedIn || !currentUser) {
+  const isSuperAdmin = currentUser ? (currentUser.is_super_admin === true || currentUser.email === 'agnus9524@gmail.com') : false;
+
+  const currentUserRoleRecord = allUserRoles.find(
+    (r) => r.user_id === currentUser?.id && r.company_id === currentCompany?.id
+  );
+
+  const effectivePermissions = useMemo(() => {
+    if (!currentUser) return new Set<PermissionCode>();
+    if (isSuperAdmin) {
+      return new Set(PERMISSION_DEFINITIONS.map((p) => p.code));
+    }
+    const roleKey = (currentRole || 'VIEWER') as keyof typeof ROLE_PERMISSIONS;
+    const basePerms = new Set(ROLE_PERMISSIONS[roleKey] || ROLE_PERMISSIONS.VIEWER || []);
+    if (currentUserRoleRecord?.custom_permissions) {
+      currentUserRoleRecord.custom_permissions.grant?.forEach((p) => basePerms.add(p));
+      currentUserRoleRecord.custom_permissions.revoke?.forEach((p) => basePerms.delete(p));
+    }
+    return basePerms;
+  }, [currentUser, isSuperAdmin, currentRole, currentUserRoleRecord]);
+
+  // Enrich companies with user count
+  const enrichedCompanies = useMemo(() => {
+    return allCompanies.map((c) => {
+      const uCount = allUserRoles.filter((r) => r.company_id === c.id).length;
+      return { ...c, user_count: Math.max(uCount, 1) };
+    });
+  }, [allCompanies, allUserRoles]);
+
+  if (!isLoggedIn) {
     return (
       <LoginView
         onLogin={handleLogin}
@@ -324,13 +454,14 @@ export default function App() {
     );
   }
 
-  const isSuperAdmin = currentUser.is_super_admin === true;
-
-  // Enrich companies with user count
-  const enrichedCompanies = allCompanies.map((c) => {
-    const uCount = allUserRoles.filter((r) => r.company_id === c.id).length;
-    return { ...c, user_count: Math.max(uCount, 1) };
-  });
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white">
+        <div className="w-10 h-10 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mb-3" />
+        <p className="text-sm font-bold text-slate-200">메인 화면으로 이동 중입니다...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 selection:bg-indigo-500 selection:text-white">
@@ -362,6 +493,7 @@ export default function App() {
           }}
           userRole={currentRole}
           isSuperAdmin={isSuperAdmin}
+          permissions={effectivePermissions}
           companyName={currentCompany ? currentCompany.company_name : '회사 선택 대기'}
           isOpenMobile={isMobileMenuOpen}
           onCloseMobile={() => setIsMobileMenuOpen(false)}
@@ -393,9 +525,14 @@ export default function App() {
                   bankAccounts={bankAccounts}
                   teams={teams}
                   accounts={accounts}
+                  joinRequests={joinRequests}
+                  userRole={currentRole}
+                  isSuperAdmin={isSuperAdmin}
                   onNavigate={setCurrentSection}
                   onOpenAddTransaction={() => setCurrentSection('transactions')}
                   onOpenBankImport={() => setIsBankImportOpen(true)}
+                  onApproveJoinRequest={handleApproveJoinRequest}
+                  onRejectJoinRequest={handleRejectJoinRequest}
                 />
               )}
 
@@ -447,47 +584,105 @@ export default function App() {
               )}
 
               {currentSection === 'admin-companies' && (
-                <AdminCompanyView
-                  companies={enrichedCompanies}
-                  currentCompanyId={currentCompany.id}
-                  onSelectCompany={handleSelectCompany}
-                  onCreateCompany={handleCreateCompany}
-                  onDeleteCompany={handleDeleteCompany}
-                  isSuperAdmin={isSuperAdmin}
+                isSuperAdmin ? (
+                  <AdminCompanyView
+                    companies={enrichedCompanies}
+                    currentCompanyId={currentCompany.id}
+                    onSelectCompany={handleSelectCompany}
+                    onCreateCompany={handleCreateCompany}
+                    onDeleteCompany={handleDeleteCompany}
+                    isSuperAdmin={isSuperAdmin}
+                  />
+                ) : (
+                  <div className="bg-white rounded-2xl border border-rose-200 p-8 sm:p-12 text-center max-w-lg mx-auto my-12 shadow-sm animate-in fade-in duration-200">
+                    <div className="w-14 h-14 bg-rose-50 text-rose-600 border border-rose-200 rounded-2xl flex items-center justify-center mx-auto mb-4 font-bold text-xl shadow-xs">
+                      <Lock className="w-7 h-7" />
+                    </div>
+                    <h2 className="text-lg font-black text-slate-900 mb-2">최고관리자 전용 메뉴입니다</h2>
+                    <p className="text-xs text-slate-600 mb-6 leading-relaxed">
+                      <strong>회사 관리 (법인)</strong> 메뉴는 시스템 최고관리자만 접근할 수 있습니다.<br />
+                      회사 내 회계, 부서, 사용자 권한 관리는 사이드바의 해당 메뉴를 이용해 주세요.
+                    </p>
+                    <button
+                      onClick={() => setCurrentSection('dashboard')}
+                      className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors shadow-xs cursor-pointer"
+                    >
+                      대시보드로 돌아가기
+                    </button>
+                  </div>
+                )
+              )}
+
+              {(currentSection === 'admin-accounting-settings' ||
+                currentSection === 'admin-accounts' ||
+                currentSection === 'admin-accounting-accounts' ||
+                currentSection === 'admin-accounting-cards' ||
+                currentSection === 'admin-accounting-cash-banks' ||
+                currentSection === 'admin-accounting-units' ||
+                currentSection === 'admin-accounting-codes') && (
+                <AdminAccountingSettingsView
+                  currentCompany={currentCompany}
+                  activeTab={
+                    currentSection === 'admin-accounting-cards'
+                      ? 'cards'
+                      : currentSection === 'admin-accounting-cash-banks'
+                      ? 'cash-banks'
+                      : currentSection === 'admin-accounting-units'
+                      ? 'units'
+                      : currentSection === 'admin-accounting-codes'
+                      ? 'codes'
+                      : 'accounts'
+                  }
+                  onTabChange={(tab: AccountingSettingTab) => {
+                    if (tab === 'cards') setCurrentSection('admin-accounting-cards');
+                    else if (tab === 'cash-banks') setCurrentSection('admin-accounting-cash-banks');
+                    else if (tab === 'units') setCurrentSection('admin-accounting-units');
+                    else if (tab === 'codes') setCurrentSection('admin-accounting-codes');
+                    else setCurrentSection('admin-accounting-accounts');
+                  }}
+                  accounts={accounts}
+                  bankAccounts={bankAccounts}
+                  userRole={currentRole}
+                  onToggleAccount={handleToggleAccount}
+                  onCreateAccount={handleCreateAccount}
+                  onDeleteAccount={handleDeleteAccount}
+                  onAddBankAccount={handleAddBankAccount}
                 />
               )}
 
-              {currentSection === 'admin-teams' && (
-                <AdminTeamsView
+              {(currentSection === 'admin-user-settings' ||
+                currentSection === 'admin-teams' ||
+                currentSection === 'admin-users' ||
+                currentSection === 'admin-permissions') && (
+                <AdminUserSettingsView
                   currentCompany={currentCompany}
+                  activeTab={
+                    currentSection === 'admin-users'
+                      ? 'users'
+                      : currentSection === 'admin-permissions'
+                      ? 'permissions'
+                      : 'teams'
+                  }
+                  onTabChange={(tab: UserSettingTab) => {
+                    if (tab === 'users') setCurrentSection('admin-users');
+                    else if (tab === 'permissions') setCurrentSection('admin-permissions');
+                    else setCurrentSection('admin-teams');
+                  }}
                   teams={teams}
                   userRole={currentRole}
                   onAddTeam={handleAddTeam}
                   onDeleteTeam={handleDeleteTeam}
-                />
-              )}
-
-              {currentSection === 'admin-accounts' && (
-                <AdminAccountsView
-                  currentCompany={currentCompany}
-                  accounts={accounts}
-                  onToggleAccount={handleToggleAccount}
-                  onCreateAccount={handleCreateAccount}
-                  onDeleteAccount={handleDeleteAccount}
-                  userRole={currentRole}
-                />
-              )}
-
-              {currentSection === 'admin-users' && (
-                <AdminUsersView
                   users={allUsers}
                   companies={allCompanies}
-                  teams={teams}
                   userRoles={allUserRoles}
-                  currentCompany={currentCompany}
+                  teamRoles={teamRoles}
                   currentUserId={currentUser.id}
                   onSwitchUser={handleSwitchUser}
                   onAssignRole={handleAssignRole}
+                  onUpdateUserStatus={handleUpdateUserStatus}
+                  onAssignTeamRole={handleAssignTeamRole}
+                  onRemoveTeamRole={handleRemoveTeamRole}
+                  onUpdateCustomPermissions={handleUpdateCustomPermissions}
                 />
               )}
 
@@ -498,10 +693,6 @@ export default function App() {
                   userRole={currentRole}
                   onAddVendor={handleAddVendor}
                 />
-              )}
-
-              {currentSection === 'admin-permissions' && (
-                <AdminPermissionsView currentCompany={currentCompany} />
               )}
             </>
           )}

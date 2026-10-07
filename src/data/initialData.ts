@@ -24,6 +24,9 @@ import {
   BankImportRow,
   AuditLog,
   PermissionCode,
+  CorporateCard,
+  AccountingUnit,
+  CompanyCodeItem,
 } from '../types';
 
 // 1. 회사 companies
@@ -171,6 +174,17 @@ export const INITIAL_ALL_USERS: User[] = [
     last_login_at: '2026-09-21T09:40:00Z',
     created_at: '2025-02-01T09:00:00Z',
     updated_at: '2026-09-21T09:40:00Z',
+    is_system_admin: false,
+  },
+  {
+    id: 'usr_newbie',
+    auth_user_id: 'google-oauth2|90918237461099',
+    email: 'newbie@daechul-youth.org',
+    name: '강신입',
+    department: '재무팀 (신입)',
+    status: 'PENDING',
+    created_at: '2026-09-29T14:30:00Z',
+    updated_at: '2026-09-29T14:30:00Z',
     is_system_admin: false,
   },
 ];
@@ -398,6 +412,16 @@ export const INITIAL_USER_COMPANY_ROLES: UserCompanyRole[] = [
     created_at: '2025-03-01T09:00:00Z',
     updated_at: '2026-09-01T10:00:00Z',
   },
+  {
+    id: 'ucr_newbie_daechul',
+    user_id: 'usr_newbie',
+    company_id: 'comp_daechul',
+    role_id: 'VIEWER',
+    status: 'PENDING',
+    reason: '재무팀 신규 입사자입니다. 전표 작성 및 열람 권한 신청합니다.',
+    created_at: '2026-09-29T14:30:00Z',
+    updated_at: '2026-09-29T14:30:00Z',
+  },
 ];
 
 // 7. 팀 teams
@@ -623,6 +647,203 @@ export const INITIAL_BANK_ACCOUNTS: BankAccount[] = [
     created_at: '2025-05-20T09:00:00Z',
     updated_at: '2026-09-22T08:00:00Z',
   },
+];
+
+// 12-1. 신용카드 (corporate_cards)
+export const INITIAL_CORPORATE_CARDS: CorporateCard[] = [
+  // 대철청소년회 법인카드
+  {
+    id: 'card_a_1',
+    company_id: 'comp_daechul',
+    card_name: '신한 법인개별카드 (운영비전용)',
+    card_number: '1102-****-****-9831',
+    card_issuer: '신한카드',
+    card_type: 'CORPORATE',
+    monthly_limit: 5000000,
+    payment_day: 25,
+    linked_bank_account_id: 'bank_a_kb',
+    holder_name: '김대철',
+    department_name: '경영지원본부',
+    is_active: true,
+    notes: '사무국 운영비 및 회의비 결제용',
+    created_at: '2025-01-10T09:00:00Z',
+    updated_at: '2026-09-01T10:00:00Z',
+  },
+  {
+    id: 'card_a_2',
+    company_id: 'comp_daechul',
+    card_name: '국민 마이비즈카드 (사업추진용)',
+    card_number: '9876-****-****-1204',
+    card_issuer: 'KB국민카드',
+    card_type: 'CORPORATE',
+    monthly_limit: 3000000,
+    payment_day: 15,
+    linked_bank_account_id: 'bank_a_nh',
+    holder_name: '박청소년',
+    department_name: '청소년사업국',
+    is_active: true,
+    notes: '청소년 캠프 및 현장 행사 결제',
+    created_at: '2025-01-15T09:00:00Z',
+    updated_at: '2026-09-01T10:00:00Z',
+  },
+  // ABC 주식회사 법인카드
+  {
+    id: 'card_b_1',
+    company_id: 'comp_abc',
+    card_name: '하나 법인하이패스·골드카드',
+    card_number: '4520-****-****-7721',
+    card_issuer: '하나카드',
+    card_type: 'CORPORATE',
+    monthly_limit: 20000000,
+    payment_day: 25,
+    linked_bank_account_id: 'bank_b_kb',
+    holder_name: '이진우',
+    department_name: '경영총괄',
+    is_active: true,
+    notes: '대표이사 업무추진비',
+    created_at: '2025-02-15T09:00:00Z',
+    updated_at: '2026-09-05T14:30:00Z',
+  },
+  {
+    id: 'card_b_2',
+    company_id: 'comp_abc',
+    card_name: '삼성 BIZ 마케팅카드',
+    card_number: '5211-****-****-3390',
+    card_issuer: '삼성카드',
+    card_type: 'CORPORATE',
+    monthly_limit: 10000000,
+    payment_day: 20,
+    linked_bank_account_id: 'bank_b_kb',
+    holder_name: '정영업',
+    department_name: '영업팀',
+    is_active: true,
+    notes: '온라인 광고집행 및 고객사 접대',
+    created_at: '2025-03-01T09:00:00Z',
+    updated_at: '2026-09-05T14:30:00Z',
+  },
+  // XYZ 법인
+  {
+    id: 'card_c_1',
+    company_id: 'comp_xyz',
+    card_name: '기업은행 법인복지카드',
+    card_number: '6501-****-****-4412',
+    card_issuer: 'IBK기업은행',
+    card_type: 'CORPORATE',
+    monthly_limit: 8000000,
+    payment_day: 25,
+    linked_bank_account_id: 'bank_c_ibk',
+    holder_name: '박명선',
+    department_name: '물류운영팀',
+    is_active: true,
+    notes: '유류대 및 차량유지비',
+    created_at: '2025-05-20T09:00:00Z',
+    updated_at: '2026-08-20T11:00:00Z',
+  },
+];
+
+// 12-2. 회계단위 (accounting_units)
+export const INITIAL_ACCOUNTING_UNITS: AccountingUnit[] = [
+  // 대철청소년회 회계단위
+  {
+    id: 'unit_a_1',
+    company_id: 'comp_daechul',
+    unit_code: 'UNIT_01',
+    unit_name: '대학로 본원 (본사)',
+    business_number: '128-82-49120',
+    representative_name: '김대철',
+    address: '서울특별시 종로구 대학로 102 3층',
+    is_main: true,
+    is_active: true,
+    notes: '중앙 사단법인 총괄 주 회계단위',
+    created_at: '2025-01-10T09:00:00Z',
+    updated_at: '2026-09-01T10:00:00Z',
+  },
+  {
+    id: 'unit_a_2',
+    company_id: 'comp_daechul',
+    unit_code: 'UNIT_02',
+    unit_name: '청소년문화나눔센터 (종로분관)',
+    business_number: '128-82-49121',
+    representative_name: '김대철',
+    address: '서울특별시 종로구 혜화로 18',
+    is_main: false,
+    is_active: true,
+    notes: '서울시 청소년 공익위탁사업장',
+    created_at: '2025-01-15T09:00:00Z',
+    updated_at: '2026-09-01T10:00:00Z',
+  },
+  // ABC 주식회사 회계단위
+  {
+    id: 'unit_b_1',
+    company_id: 'comp_abc',
+    unit_code: 'HQ_01',
+    unit_name: '테헤란로 본점',
+    business_number: '220-81-74891',
+    representative_name: '이진우',
+    address: '서울특별시 강남구 테헤란로 152 8층',
+    is_main: true,
+    is_active: true,
+    notes: '법인 등기 본점 및 총괄사업부',
+    created_at: '2025-02-15T09:00:00Z',
+    updated_at: '2026-09-05T14:30:00Z',
+  },
+  {
+    id: 'unit_b_2',
+    company_id: 'comp_abc',
+    unit_code: 'RND_02',
+    unit_name: '판교 R&D 센터 (지점)',
+    business_number: '220-85-11029',
+    representative_name: '이진우',
+    address: '경기도 성남시 분당구 판교역로 235 에이치스퀘어',
+    is_main: false,
+    is_active: true,
+    notes: '기업부설 R&D 연구소 및 개발센터',
+    created_at: '2025-03-01T09:00:00Z',
+    updated_at: '2026-09-05T14:30:00Z',
+  },
+  // XYZ 법인
+  {
+    id: 'unit_c_1',
+    company_id: 'comp_xyz',
+    unit_code: 'SONGDO_01',
+    unit_name: '송도 본점',
+    business_number: '314-86-09231',
+    representative_name: '박명선',
+    address: '인천광역시 연수구 송도과학로 32',
+    is_main: true,
+    is_active: true,
+    notes: '물류 총괄 본점',
+    created_at: '2025-05-20T09:00:00Z',
+    updated_at: '2026-08-20T11:00:00Z',
+  },
+];
+
+// 12-3. 코드종합관리 (company_codes)
+export const INITIAL_COMPANY_CODES: CompanyCodeItem[] = [
+  // 1. 지출유형구분 (EXPENSE_TYPE)
+  { id: 'code_exp_1', company_id: 'comp_daechul', group_code: 'EXPENSE_TYPE', group_name: '지출유형구분', code_value: 'EXP_OP', code_name: '일반운영비', sort_order: 1, is_system: true, is_active: true, description: '일상 사무 및 기관 운영 지출', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_exp_2', company_id: 'comp_daechul', group_code: 'EXPENSE_TYPE', group_name: '지출유형구분', code_value: 'EXP_BIZ', code_name: '사업추진비', sort_order: 2, is_system: true, is_active: true, description: '목적사업 및 대외활동 지출', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_exp_3', company_id: 'comp_daechul', group_code: 'EXPENSE_TYPE', group_name: '지출유형구분', code_value: 'EXP_MEAL', code_name: '회의비 및 식대', sort_order: 3, is_system: false, is_active: true, description: '부서 회의 및 야근 식대', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_exp_4', company_id: 'comp_daechul', group_code: 'EXPENSE_TYPE', group_name: '지출유형구분', code_value: 'EXP_TRIP', code_name: '출장여비/교통비', sort_order: 4, is_system: false, is_active: true, description: '지방 출장 및 대중교통 이용료', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_exp_5', company_id: 'comp_daechul', group_code: 'EXPENSE_TYPE', group_name: '지출유형구분', code_value: 'EXP_WELFARE', code_name: '복리후생비', sort_order: 5, is_system: false, is_active: true, description: '직원 복지 및 경조사비', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+
+  // 2. 결제수단구분 (PAYMENT_METHOD)
+  { id: 'code_pay_1', company_id: 'comp_daechul', group_code: 'PAYMENT_METHOD', group_name: '결제수단구분', code_value: 'PAY_CARD', code_name: '법인신용카드', sort_order: 1, is_system: true, is_active: true, description: '법인 지정 카드 승인 결제', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_pay_2', company_id: 'comp_daechul', group_code: 'PAYMENT_METHOD', group_name: '결제수단구분', code_value: 'PAY_TRANSFER', code_name: '보통예금 계좌이체', sort_order: 2, is_system: true, is_active: true, description: '은행 온라인 뱅킹 출금', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_pay_3', company_id: 'comp_daechul', group_code: 'PAYMENT_METHOD', group_name: '결제수단구분', code_value: 'PAY_CASH', code_name: '현금출납', sort_order: 3, is_system: false, is_active: true, description: '소액 현금 직접 지출', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_pay_4', company_id: 'comp_daechul', group_code: 'PAYMENT_METHOD', group_name: '결제수단구분', code_value: 'PAY_GIRO', code_name: '지로 및 자동이체', sort_order: 4, is_system: false, is_active: true, description: '공과금/통신비 정기 납부', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+
+  // 3. 증빙서류유형 (PROOF_TYPE)
+  { id: 'code_prf_1', company_id: 'comp_daechul', group_code: 'PROOF_TYPE', group_name: '증빙서류유형', code_value: 'PROOF_TAX_E', code_name: '전자세금계산서', sort_order: 1, is_system: true, is_active: true, description: '국세청 홈택스 전자세금계산서', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_prf_2', company_id: 'comp_daechul', group_code: 'PROOF_TYPE', group_name: '증빙서류유형', code_value: 'PROOF_BILL_E', code_name: '전자계산서(면세)', sort_order: 2, is_system: true, is_active: true, description: '부가가치세 면세 품목 계산서', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_prf_3', company_id: 'comp_daechul', group_code: 'PROOF_TYPE', group_name: '증빙서류유형', code_value: 'PROOF_SLIP', code_name: '신용카드매출전표', sort_order: 3, is_system: true, is_active: true, description: '카드 가맹점 매출 영수증', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_prf_4', company_id: 'comp_daechul', group_code: 'PROOF_TYPE', group_name: '증빙서류유형', code_value: 'PROOF_CASH_RCPT', code_name: '현금영수증(지출증빙)', sort_order: 4, is_system: false, is_active: true, description: '사업자 지출증빙용 현금영수증', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_prf_5', company_id: 'comp_daechul', group_code: 'PROOF_TYPE', group_name: '증빙서류유형', code_value: 'PROOF_SIMPLE', code_name: '간이영수증(3만원이하)', sort_order: 5, is_system: false, is_active: true, description: '소액 간이 영수증', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+
+  // 4. 프로젝트/목적구분 (PROJECT_TAG)
+  { id: 'code_prj_1', company_id: 'comp_daechul', group_code: 'PROJECT_TAG', group_name: '프로젝트구분', code_value: 'PRJ_CAMP', code_name: '2026 청소년희망캠프', sort_order: 1, is_system: false, is_active: true, description: '여름방학 청소년 문화캠프', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_prj_2', company_id: 'comp_daechul', group_code: 'PROJECT_TAG', group_name: '프로젝트구분', code_value: 'PRJ_MENTOR', code_name: '자립청년 멘토링사업', sort_order: 2, is_system: false, is_active: true, description: '보호종료 청년 멘토링 프로그램', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
+  { id: 'code_prj_3', company_id: 'comp_daechul', group_code: 'PROJECT_TAG', group_name: '프로젝트구분', code_value: 'PRJ_SEOUL_GRANT', code_name: '서울시 공익위탁사업', sort_order: 3, is_system: false, is_active: true, description: '지자체 보조금 전용 사업', created_at: '2025-01-10T09:00:00Z', updated_at: '2026-09-01T10:00:00Z' },
 ];
 
 // 13. 거래처 vendors

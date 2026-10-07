@@ -22,6 +22,9 @@ import {
   Role,
   Permission,
   RolePermission,
+  JoinRequest,
+  PermissionCode,
+  UserTeamRole,
 } from '../types';
 
 class ApiClient {
@@ -96,11 +99,21 @@ class ApiClient {
     return localStorage.getItem('dondon_is_logged_in') === 'true';
   }
 
-  async requestJoinCompany(companyId: string, reason: string): Promise<any> {
+  async requestJoinCompany(
+    companyIdOrPayload: string | { company_id: string; reason?: string; name?: string; email?: string; department?: string },
+    reason?: string,
+    name?: string,
+    email?: string
+  ): Promise<any> {
+    const payload =
+      typeof companyIdOrPayload === 'object'
+        ? companyIdOrPayload
+        : { company_id: companyIdOrPayload, reason, name, email };
+
     const res = await fetch('/api/v1/auth/request-join', {
       method: 'POST',
       headers: this.getHeaders(),
-      body: JSON.stringify({ company_id: companyId, reason }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -430,6 +443,7 @@ class ApiClient {
     roles: UserCompanyRole[];
     companies: Company[];
     all_roles: Role[];
+    team_roles?: UserTeamRole[];
   }> {
     const res = await fetch('/api/v1/admin/users-and-roles', { headers: this.getHeaders() });
     if (!res.ok) throw new Error('사용자 및 권한 정보 조회 실패');
@@ -442,7 +456,91 @@ class ApiClient {
       headers: this.getHeaders(),
       body: JSON.stringify({ user_id, company_id, role_id }),
     });
-    if (!res.ok) throw new Error('권한 설정 실패');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '권한 설정 실패');
+    }
+  }
+
+  async updateCustomPermissions(
+    roleRecordId: string,
+    grant: PermissionCode[],
+    revoke: PermissionCode[]
+  ): Promise<void> {
+    const res = await fetch(`/api/v1/admin/user-company-roles/${roleRecordId}/permissions`, {
+      method: 'PUT',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ grant, revoke }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '개별 메뉴 권한 저장 실패');
+    }
+  }
+
+  async assignTeamRole(user_id: string, team_id: string, company_id: string, role_id: string): Promise<void> {
+    const res = await fetch('/api/v1/admin/user-team-roles', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ user_id, team_id, company_id, role_id }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '팀 권한 배정 실패');
+    }
+  }
+
+  async removeTeamRole(id: string): Promise<void> {
+    const res = await fetch(`/api/v1/admin/user-team-roles/${id}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) throw new Error('팀 권한 제거 실패');
+  }
+
+  async getJoinRequests(): Promise<JoinRequest[]> {
+    const res = await fetch('/api/v1/admin/join-requests', { headers: this.getHeaders() });
+    if (!res.ok) throw new Error('가입 신청 목록 조회 실패');
+    const data = await res.json();
+    return data.requests || [];
+  }
+
+  async approveJoinRequest(id: string, role_id: string): Promise<any> {
+    const res = await fetch(`/api/v1/admin/join-requests/${id}/approve`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ role_id }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '가입 승인 실패');
+    }
+    return res.json();
+  }
+
+  async rejectJoinRequest(id: string): Promise<any> {
+    const res = await fetch(`/api/v1/admin/join-requests/${id}/reject`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '가입 반려 실패');
+    }
+    return res.json();
+  }
+
+  async updateUserStatus(userId: string, status: 'ACTIVE' | 'SUSPENDED' | 'PENDING'): Promise<any> {
+    const res = await fetch(`/api/v1/admin/users/${userId}/status`, {
+      method: 'PUT',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '사용자 상태 변경 실패');
+    }
+    return res.json();
   }
 }
 

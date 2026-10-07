@@ -108,12 +108,29 @@ export interface UserCompanyRole {
   company_id: string;
   role_id: string; // FK to roles
   status: EntityStatus;
+  reason?: string;
   custom_permissions?: {
     grant: PermissionCode[];
     revoke: PermissionCode[];
   };
   created_at: string;
   updated_at: string;
+}
+
+// 6-1. 신규 소속 가입 신청 (join_requests)
+export interface JoinRequest {
+  id: string;
+  role_record_id: string;
+  user_id: string;
+  user_name: string;
+  user_email: string;
+  company_id: string;
+  company_name: string;
+  company_code: string;
+  reason: string;
+  status: EntityStatus;
+  created_at: string;
+  suggested_role?: RoleType;
 }
 
 // 7. 팀 (teams) - 회사에 종속
@@ -224,6 +241,7 @@ export interface Transaction {
   id: string;
   company_id: string; // Core Multi-Tenant Key
   team_id: string;
+  accounting_unit_id?: string; // 소속 회계단위 (본점, 지점, 부설기관 등)
   fiscal_period_id?: string;
   transaction_date: string;
   transaction_type: TransactionType;
@@ -265,6 +283,7 @@ export interface Budget {
   id: string;
   company_id: string;
   team_id: string;
+  accounting_unit_id?: string; // 소속 회계단위
   fiscal_period_id?: string;
   fiscal_year?: number; // 편리한 연도 필터링
   account_id: string;
@@ -324,8 +343,8 @@ export interface AuditLog {
   id: string;
   company_id: string;
   user_id: string;
-  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'CONFIRM' | 'CANCEL' | 'CLOSE_PERIOD' | 'IMPORT' | 'LOGIN';
-  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR' | 'AUTH' | 'USER_COMPANY_ROLE_REQUEST';
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'CONFIRM' | 'CANCEL' | 'CLOSE_PERIOD' | 'IMPORT' | 'LOGIN' | 'APPROVE' | 'SUSPEND';
+  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR' | 'AUTH' | 'USER_COMPANY_ROLE_REQUEST' | 'USER_STATUS' | 'USER';
   entity_id: string;
   before_data?: any;
   after_data?: any;
@@ -362,3 +381,55 @@ export interface RoleInfo {
   description: string;
   color: string;
 }
+
+// 21. 신용카드 (corporate_cards) - 법인카드 및 업무용 카드
+export interface CorporateCard {
+  id: string;
+  company_id: string;
+  card_name: string;
+  card_number: string; // 마스킹 (예: 1102-****-****-9831)
+  card_issuer: string; // 신한카드, KB국민카드, 하나카드, 삼성카드 등
+  card_type: 'CORPORATE' | 'INDIVIDUAL_CORP' | 'CHECK';
+  monthly_limit: number;
+  payment_day: number;
+  linked_bank_account_id?: string;
+  holder_name?: string;
+  department_name?: string;
+  is_active: boolean;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// 22. 회계단위 (accounting_units) - 사업장, 본점/지점, 사업부문
+export interface AccountingUnit {
+  id: string;
+  company_id: string;
+  unit_code: string;
+  unit_name: string;
+  business_number?: string;
+  representative_name?: string;
+  address?: string;
+  is_main: boolean;
+  is_active: boolean;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// 23. 코드종합관리 (company_codes) - 회사별 맞춤 공통 코드
+export interface CompanyCodeItem {
+  id: string;
+  company_id: string;
+  group_code: string; // EXPENSE_TYPE, PAYMENT_METHOD, PROOF_TYPE, PROJECT_TAG 등
+  group_name: string; // 지출유형구분, 결제수단구분, 증빙서류유형, 프로젝트구분 등
+  code_value: string;
+  code_name: string;
+  sort_order: number;
+  is_system?: boolean;
+  is_active: boolean;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+}
+
