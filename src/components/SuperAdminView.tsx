@@ -68,12 +68,20 @@ export const SuperAdminView: React.FC = () => {
   const [newKeyDays, setNewKeyDays] = useState(30);
   const [newKeyMemo, setNewKeyMemo] = useState('');
 
+  // 데이터 저장 상태 (배포 때 데이터가 지워지는 상태인지 경고)
+  const [storage, setStorage] = useState<Awaited<ReturnType<typeof api.getStorageStatus>> | null>(null);
+
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [lics, keys] = await Promise.all([api.getLicenses(), api.getAuthKeys()]);
+      const [lics, keys, storageStatus] = await Promise.all([
+        api.getLicenses(),
+        api.getAuthKeys(),
+        api.getStorageStatus().catch(() => null),
+      ]);
       setLicenses(lics);
       setAuthKeys(keys);
+      setStorage(storageStatus);
     } catch (err: any) {
       setNotice({ type: 'error', text: err.message || '데이터를 불러오지 못했습니다.' });
     } finally {
@@ -206,6 +214,27 @@ export const SuperAdminView: React.FC = () => {
           새로고침
         </button>
       </div>
+
+      {/* 데이터 저장 상태 */}
+      {storage && (storage.ephemeral || storage.last_error) && (
+        <div className="p-4 rounded-2xl border-2 border-rose-300 bg-rose-50 text-rose-900 text-sm space-y-1">
+          <div className="font-black flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 text-rose-600" />
+            {storage.last_error ? '데이터 저장에 실패하고 있습니다' : '데이터가 영구 저장되지 않는 상태입니다'}
+          </div>
+          <p className="text-xs leading-relaxed">
+            {storage.last_error
+              ? `최근 저장 오류: ${storage.last_error}`
+              : '지금은 회사·라이선스·전표가 서버 내부 파일에만 저장되어, 새로 배포하면 모두 지워집니다. 배포 서비스의 환경변수에 FIREBASE_SERVICE_ACCOUNT를 설정해 Firestore 저장으로 바꿔 주세요.'}
+          </p>
+        </div>
+      )}
+      {storage && !storage.ephemeral && !storage.last_error && (
+        <div className="px-4 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-xs font-semibold flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span>데이터 저장: {storage.mode === 'firestore' ? 'Firestore (배포해도 유지)' : storage.description}</span>
+          {storage.last_saved_at && <span className="text-emerald-700/80">마지막 저장 {new Date(storage.last_saved_at).toLocaleString('ko-KR')}</span>}
+        </div>
+      )}
 
       {/* Summary */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

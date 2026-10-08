@@ -8,6 +8,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
+import { createSnapshotStore, FileSnapshotStore, Snapshot, SnapshotStore } from './storage';
 import { createServer as createViteServer } from 'vite';
 import {
   INITIAL_COMPANIES,
@@ -65,20 +66,22 @@ const SUPER_ADMIN_EMAIL = (process.env.SUPER_ADMIN_EMAIL || 'agnus9524@gmail.com
 // 데이터 저장 파일 (서버를 껐다 켜도 회사·라이선스·전표가 유지되도록 JSON으로 저장)
 const DATA_FILE = process.env.DONDON_DATA_FILE || path.join(process.cwd(), 'data', 'dondon-db.json');
 
-// Firebase 프로젝트 ID — 돈돈 전용 Firebase 설정 파일(firebase-applet-config.json)에서 읽는다.
-function readFirebaseProjectId(): string {
-  const fromEnv = (process.env.FIREBASE_PROJECT_ID || '').trim();
-  if (fromEnv) return fromEnv;
+// 돈돈 전용 Firebase 설정 파일(firebase-applet-config.json)의 값을 읽는다.
+function readFirebaseConfigField(field: string): string {
   try {
     const raw = fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf-8');
-    const projectId = String(JSON.parse(raw).projectId || '').trim();
-    if (projectId && !projectId.startsWith('YOUR_')) return projectId;
+    const value = String(JSON.parse(raw)[field] || '').trim();
+    if (value && !value.startsWith('YOUR_')) return value;
   } catch {
     // 설정 파일이 없으면 미설정 상태로 둔다.
   }
   return '';
 }
-const FIREBASE_PROJECT_ID = readFirebaseProjectId();
+// Firebase 프로젝트 ID (로그인 토큰 검증용)
+const FIREBASE_PROJECT_ID = (process.env.FIREBASE_PROJECT_ID || '').trim() || readFirebaseConfigField('projectId');
+// 데이터를 영구 저장할 Firestore 데이터베이스 ID
+const FIRESTORE_DATABASE_ID =
+  (process.env.FIRESTORE_DATABASE_ID || '').trim() || readFirebaseConfigField('firestoreDatabaseId') || '(default)';
 
 // 개발용 로그인: Firebase 설정 전에 로컬에서만 화면을 확인하기 위한 스위치.
 // 운영(production)에서는 절대 켜지지 않는다.
@@ -224,55 +227,97 @@ class AccountingDatabase {
     return newLog;
   }
 
-  // 저장 파일이 있으면 불러온다 (없으면 빈 상태로 시작)
-  load() {
-    if (!fs.existsSync(DATA_FILE)) return;
-    try {
-      const saved = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
-      for (const table of PERSISTED_TABLES) {
-        if (Array.isArray(saved[table])) {
-          (this as any)[table] = saved[table];
-        }
+  // 저장된 스냅샷을 메모리에 올린다
+  applySnapshot(saved: Snapshot) {
+    for (const table of PERSISTED_TABLES) {
+      if (Array.isArray(saved[table])) {
+        (this as any)[table] = saved[table];
       }
-      console.log(`[db] 저장된 데이터를 불러왔습니다: ${DATA_FILE}`);
-    } catch (err) {
-      // 손상된 파일을 덮어써서 데이터를 잃지 않도록, 읽기에 실패하면 서버를 멈춘다.
-      console.error(`[db] 데이터 파일을 읽지 못했습니다: ${DATA_FILE}`, err);
-      throw err;
+    }
+    // 예전 데이터 보정: 회사가 추가한 계정과목인데 소유 회사가 비어 있으면, 처음 등록한 회사로 채운다
+    for (const acc of this.accounts) {
+      if (acc.is_system || acc.company_id) continue;
+      const firstUse = this.companyAccounts
+        .filter((ca) => ca.account_id === acc.id)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
+      if (firstUse) acc.company_id = firstUse.company_id;
     }
   }
 
-  saveNow() {
+  toSnapshot(): Snapshot {
+    const snapshot: Snapshot = { saved_at: new Date().toISOString() };
+    for (const table of PERSISTED_TABLES) {
+      snapshot[table] = (this as any)[table];
+    }
+    return snapshot;
+  }
+
+  // ── 영구 저장 ──
+  store: SnapshotStore | null = null;
+  storageReady = false;
+  lastSavedAt: string | null = null;
+  lastSaveError: string | null = null;
+  private saveChain: Promise<void> = Promise.resolve();
+  private dirty = false;
+
+  // 서버 시작 시 한 번: 저장소에서 데이터를 불러온다.
+  // 불러오기에 실패하면 서버를 띄우지 않는다 (빈 데이터로 시작해 기존 데이터를 덮어쓰는 사고 방지).
+  async initStorage(store: SnapshotStore, legacyFile: string) {
+    this.store = store;
+    let saved = await store.load();
+    if (!saved && store.mode === 'firestore' && fs.existsSync(legacyFile)) {
+      // 처음 Firestore로 옮길 때: 서버에 남아 있던 파일 데이터를 가져온다
+      saved = await new FileSnapshotStore(legacyFile).load();
+      if (saved) console.log(`[db] 기존 파일 데이터를 Firestore로 옮깁니다: ${legacyFile}`);
+      if (saved) this.dirty = true;
+    }
+    if (saved) {
+      this.applySnapshot(saved);
+      console.log(`[db] 저장된 데이터를 불러왔습니다 (${store.description}): 회사 ${this.companies.length}개, 라이선스 ${this.licenses.length}개`);
+    } else {
+      console.log(`[db] 저장된 데이터가 없어 새로 시작합니다 (${store.description})`);
+    }
+    this.storageReady = true;
+    if (this.dirty) this.scheduleSave();
+  }
+
+  // 지금까지의 변경을 저장 (저장은 한 번에 하나씩 순서대로)
+  saveNow(): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    const snapshot: Record<string, unknown> = { saved_at: new Date().toISOString() };
-    for (const table of PERSISTED_TABLES) {
-      snapshot[table] = (this as any)[table];
-    }
-    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    const tmpFile = `${DATA_FILE}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(snapshot));
-    fs.renameSync(tmpFile, DATA_FILE);
+    if (!this.store || !this.storageReady) return this.saveChain;
+    this.dirty = false;
+    const snapshot = this.toSnapshot();
+    const store = this.store;
+    this.saveChain = this.saveChain.then(async () => {
+      try {
+        await store.save(snapshot);
+        this.lastSavedAt = new Date().toISOString();
+        this.lastSaveError = null;
+      } catch (err: any) {
+        this.lastSaveError = err?.message || String(err);
+        this.dirty = true; // 다음 변경 때 다시 저장
+        console.error('[db] 데이터 저장 실패:', err);
+        setTimeout(() => this.scheduleSave(), 5000);
+      }
+    });
+    return this.saveChain;
   }
 
   // 변경이 몰려도 한 번만 쓰도록 잠깐 모았다가 저장
   scheduleSave() {
+    this.dirty = true;
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      try {
-        this.saveNow();
-      } catch (err) {
-        console.error('[db] 데이터 저장 실패:', err);
-      }
-    }, 200);
+      void this.saveNow();
+    }, 500);
   }
 }
 
 const db = new AccountingDatabase();
-db.load();
 
 // 라이선스 상태 계산: 중지 > 만료 > 정상
 function getLicenseState(license: License | undefined): LicenseState {
@@ -387,8 +432,8 @@ function provisionCompany(
     updated_at: now,
   });
 
-  // Default Company Accounts (Method B)
-  db.accounts.forEach((acc) => {
+  // Default Company Accounts (Method B) — 공통 계정과목만 (다른 회사가 추가한 과목은 제외)
+  db.accounts.filter((acc) => !acc.company_id).forEach((acc) => {
     db.companyAccounts.push({
       id: `ca_${newCompany.id}_${acc.id}`,
       company_id: newCompany.id,
@@ -406,6 +451,15 @@ function provisionCompany(
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
+
+  // 1) 저장소 연결 + 데이터 불러오기 (실패하면 여기서 멈춤)
+  const store = await createSnapshotStore({
+    dataFile: DATA_FILE,
+    serviceAccountRaw: process.env.FIREBASE_SERVICE_ACCOUNT,
+    firestoreDatabaseId: FIRESTORE_DATABASE_ID,
+  });
+  await db.initStorage(store, DATA_FILE);
+  const STORAGE_IS_EPHEMERAL = store.mode === 'file' && process.env.NODE_ENV === 'production' && !process.env.DONDON_DATA_FILE;
 
   app.use(express.json({ limit: '10mb' }));
 
@@ -817,6 +871,18 @@ async function startServer() {
   // 슈퍼 관리자 패널 API — 회원 라이선스 / 인증키 관리 (최고관리자 전용)
   // ────────────────────────────────────────────────────────────────
 
+  // 데이터 저장 상태 (슈퍼 관리자 패널 상단에 표시)
+  app.get('/api/v1/super/storage', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    res.json({
+      mode: store.mode,
+      description: store.mode === 'firestore' ? store.description : '서버 내부 파일',
+      ephemeral: STORAGE_IS_EPHEMERAL,
+      last_saved_at: db.lastSavedAt,
+      last_error: db.lastSaveError,
+      counts: { companies: db.companies.length, licenses: db.licenses.length, users: db.users.length },
+    });
+  });
+
   app.get('/api/v1/super/licenses', requireSuperAdmin, (req: TenantRequest, res: Response) => {
     const rows = db.licenses
       .map((lic) => {
@@ -1037,6 +1103,7 @@ async function startServer() {
     db.companies.splice(compIdx, 1);
     db.teams = db.teams.filter((t) => t.company_id !== companyId);
     db.companyAccounts = db.companyAccounts.filter((ca) => ca.company_id !== companyId);
+    db.accounts = db.accounts.filter((acc) => acc.company_id !== companyId);
     db.bankAccounts = db.bankAccounts.filter((ba) => ba.company_id !== companyId);
     db.vendors = db.vendors.filter((v) => v.company_id !== companyId);
     db.fiscalPeriods = db.fiscalPeriods.filter((fp) => fp.company_id !== companyId);
@@ -1225,6 +1292,18 @@ async function startServer() {
   });
 
   // Accounts with Company Active Status (Method B)
+  // 이 회사가 볼 수 있는 계정과목 = 공통 계정과목 + 이 회사가 직접 추가한 계정과목
+  const getVisibleAccounts = (companyId: string) =>
+    db.accounts.filter((acc) => !acc.company_id || acc.company_id === companyId);
+
+  const ACCOUNT_TYPES = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'] as const;
+  type AccountTypeCode = (typeof ACCOUNT_TYPES)[number];
+  const defaultAccountCategory = (type: string) =>
+    type === 'EXPENSE' ? '판관비' : type === 'REVENUE' ? '사업수익' : '일반';
+
+  const canManageAccounts = (req: TenantRequest) =>
+    !!req.isSuperAdmin || ['ORG_ADMIN', 'ADMIN', 'HQ_ACCOUNTANT'].includes(req.userRole?.role_id || '');
+
   app.get('/api/v1/accounts', requireCompanyAccess, (req: TenantRequest, res: Response) => {
     const companyId = req.companyId!;
     const activeMap = new Map(
@@ -1233,7 +1312,7 @@ async function startServer() {
         .map((ca) => [ca.account_id, ca.is_active])
     );
 
-    const result = db.accounts.map((acc) => ({
+    const result = getVisibleAccounts(companyId).map((acc) => ({
       ...acc,
       is_active: activeMap.has(acc.id) ? !!activeMap.get(acc.id) : true,
     }));
@@ -1259,8 +1338,11 @@ async function startServer() {
       return res.status(400).json({ error: '계정코드, 계정과목명, 분류(Type)는 필수 항목입니다.' });
     }
 
+    if (!ACCOUNT_TYPES.includes(account_type)) {
+      return res.status(400).json({ error: '분류(Type)는 자산·부채·자본·수익·비용 중 하나여야 합니다.' });
+    }
     const cleanCode = String(account_code).trim();
-    if (db.accounts.some((a) => a.account_code === cleanCode)) {
+    if (getVisibleAccounts(req.companyId!).some((a) => a.account_code === cleanCode)) {
       return res.status(400).json({ error: `계정코드 [${cleanCode}]는 이미 등록되어 있습니다.` });
     }
 
@@ -1272,6 +1354,7 @@ async function startServer() {
       category: category || (account_type === 'EXPENSE' ? '판관비' : account_type === 'REVENUE' ? '사업수익' : '일반'),
       description: description || '',
       is_system: false,
+      company_id: req.companyId!,
       created_at: new Date().toISOString(),
     };
 
@@ -1306,6 +1389,96 @@ async function startServer() {
     });
   });
 
+  // Batch Create Account Codes (엑셀 일괄 업로드)
+  // 새 계정코드만 이 회사의 계정과목으로 등록한다. 이미 있는 코드(공통 또는 이 회사 과목)는 손대지 않고 건너뛴다.
+  app.post('/api/v1/accounts/batch', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+    if (!canManageAccounts(req)) {
+      return res.status(403).json({ error: '계정과목 생성 권한이 없습니다.' });
+    }
+
+    const { accounts } = req.body || {};
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      return res.status(400).json({ error: '등록할 계정과목 목록(accounts 배열)이 필요합니다.' });
+    }
+    if (accounts.length > 2000) {
+      return res.status(400).json({ error: '한 번에 등록할 수 있는 계정과목은 최대 2,000건입니다.' });
+    }
+
+    const companyId = req.companyId!;
+    const now = nowIso();
+    const knownCodes = new Set(getVisibleAccounts(companyId).map((a) => a.account_code));
+    const createdList: (Account & { is_active: boolean })[] = [];
+    const skipped: { account_code: string; reason: string }[] = [];
+
+    for (const item of accounts) {
+      const code = String(item?.account_code ?? '').trim();
+      const name = String(item?.account_name ?? '').trim();
+      const type = String(item?.account_type ?? '').trim().toUpperCase() as AccountTypeCode;
+
+      if (!code || !name) {
+        skipped.push({ account_code: code, reason: '계정코드 또는 과목명 누락' });
+        continue;
+      }
+      if (!ACCOUNT_TYPES.includes(type)) {
+        skipped.push({ account_code: code, reason: '과목구분 오류' });
+        continue;
+      }
+      if (knownCodes.has(code)) {
+        skipped.push({ account_code: code, reason: '이미 등록된 계정코드' });
+        continue;
+      }
+      knownCodes.add(code);
+
+      const isActive = item.is_active !== false;
+      const newAccount: Account = {
+        id: `acc_${Date.now()}_${randomSuffix()}`,
+        account_code: code,
+        account_name: name,
+        account_type: type,
+        category: String(item.category ?? '').trim() || defaultAccountCategory(type),
+        description: String(item.description ?? '').trim(),
+        is_system: false,
+        company_id: companyId,
+        created_at: now,
+      };
+      db.accounts.push(newAccount);
+      db.companyAccounts.push({
+        id: `ca_${companyId}_${newAccount.id}`,
+        company_id: companyId,
+        account_id: newAccount.id,
+        is_active: isActive,
+        created_at: now,
+      });
+      createdList.push({ ...newAccount, is_active: isActive });
+    }
+
+    if (createdList.length > 0) {
+      db.addAuditLog({
+        company_id: companyId,
+        user_id: req.user!.id,
+        user_name: req.user!.name,
+        action: 'CREATE',
+        entity_type: 'ACCOUNT',
+        entity_id: 'batch',
+        after_data: {
+          count: createdList.length,
+          skipped: skipped.length,
+          account_codes: createdList.map((a) => a.account_code),
+        },
+        ip_address: req.ip,
+        user_agent: req.headers['user-agent'],
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      created_count: createdList.length,
+      skipped_count: skipped.length,
+      skipped,
+      accounts: createdList,
+    });
+  });
+
   // Delete Account Code
   app.delete('/api/v1/accounts/:id', requireCompanyAccess, (req: TenantRequest, res: Response) => {
     const roleId = req.userRole?.role_id;
@@ -1320,12 +1493,22 @@ async function startServer() {
     }
 
     const accountId = req.params.id;
-    const accIdx = db.accounts.findIndex((a) => a.id === accountId);
+    // 다른 회사가 추가한 계정과목은 존재 자체를 알려 주지 않는다
+    const accIdx = db.accounts.findIndex(
+      (a) => a.id === accountId && (req.isSuperAdmin || !a.company_id || a.company_id === req.companyId)
+    );
     if (accIdx === -1) {
       return res.status(404).json({ error: '삭제할 계정과목을 찾을 수 없습니다.' });
     }
 
     const targetAccount = db.accounts[accIdx];
+
+    // 공통 계정과목은 모든 회사가 함께 쓰므로 최고관리자만 삭제할 수 있다
+    if (!targetAccount.company_id && !req.isSuperAdmin) {
+      return res.status(403).json({
+        error: `[${targetAccount.account_code} ${targetAccount.account_name}]은(는) 모든 회사가 함께 쓰는 공통 계정과목이라 삭제할 수 없습니다. 쓰지 않으려면 [사용 여부]를 OFF로 변경해 주세요.`,
+      });
+    }
 
     // Check if account is used in transactions
     const usedCount = db.transactions.filter((t) => t.account_id === accountId).length;
@@ -1361,6 +1544,9 @@ async function startServer() {
   app.put('/api/v1/company-accounts/:accountId/toggle', requireCompanyAccess, (req: TenantRequest, res: Response) => {
     const companyId = req.companyId!;
     const accountId = req.params.accountId;
+    if (!getVisibleAccounts(companyId).some((a) => a.id === accountId)) {
+      return res.status(404).json({ error: '계정과목을 찾을 수 없습니다.' });
+    }
     let entry = db.companyAccounts.find((ca) => ca.company_id === companyId && ca.account_id === accountId);
     if (!entry) {
       entry = {
@@ -1866,8 +2052,9 @@ async function startServer() {
     }
 
     const defaultTeam = db.teams.find((t) => t.company_id === req.companyId);
-    const defaultExpenseAcc = db.accounts.find((a) => a.account_code === '5250') || db.accounts.find((a) => a.account_type === 'EXPENSE')!;
-    const defaultIncomeAcc = db.accounts.find((a) => a.account_code === '4200') || db.accounts.find((a) => a.account_type === 'REVENUE')!;
+    const visibleAccounts = getVisibleAccounts(req.companyId!);
+    const defaultExpenseAcc = visibleAccounts.find((a) => a.account_code === '5250') || visibleAccounts.find((a) => a.account_type === 'EXPENSE')!;
+    const defaultIncomeAcc = visibleAccounts.find((a) => a.account_code === '4200') || visibleAccounts.find((a) => a.account_type === 'REVENUE')!;
     const bank = db.bankAccounts.find((b) => b.id === importSession.bank_account_id);
 
     const generatedTxs: Transaction[] = [];
@@ -2446,7 +2633,10 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`돈돈 회계관리 프로그램 서버 실행 중: http://localhost:${PORT}`);
     console.log(`  최고관리자 계정: ${SUPER_ADMIN_EMAIL}`);
-    console.log(`  데이터 저장 파일: ${DATA_FILE}`);
+    console.log(`  데이터 저장 위치: ${store.mode === 'firestore' ? store.description : DATA_FILE}`);
+    if (STORAGE_IS_EPHEMERAL) {
+      console.warn('  ⚠ 데이터가 서버 내부 파일에 저장됩니다. 새로 배포하면 지워집니다! FIREBASE_SERVICE_ACCOUNT를 설정하세요.');
+    }
     if (!FIREBASE_PROJECT_ID) {
       console.warn('  ⚠ Firebase가 설정되지 않았습니다. firebase-applet-config.json을 채워야 Google 로그인이 동작합니다.');
     }
@@ -2456,9 +2646,12 @@ async function startServer() {
   });
 
   // 종료 시 마지막 변경분까지 저장
-  const flushAndExit = () => {
+  let exiting = false;
+  const flushAndExit = async () => {
+    if (exiting) return;
+    exiting = true;
     try {
-      db.saveNow();
+      await db.saveNow();
     } catch (err) {
       console.error('[db] 종료 중 저장 실패:', err);
     }
@@ -2468,4 +2661,7 @@ async function startServer() {
   process.on('SIGTERM', flushAndExit);
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('[server] 서버를 시작하지 못했습니다:', err);
+  process.exit(1);
+});

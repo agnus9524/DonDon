@@ -155,6 +155,19 @@ class ApiClient {
     if (!res.ok) throw await toApiError(res, '라이선스 삭제 실패');
   }
 
+  async getStorageStatus(): Promise<{
+    mode: 'firestore' | 'file';
+    description: string;
+    ephemeral: boolean;
+    last_saved_at: string | null;
+    last_error: string | null;
+    counts: { companies: number; licenses: number; users: number };
+  }> {
+    const res = await authFetch('/api/v1/super/storage', { headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '저장 상태 조회 실패');
+    return res.json();
+  }
+
   async getAuthKeys(): Promise<(AuthKey & { company_name?: string })[]> {
     const res = await authFetch('/api/v1/super/auth-keys', { headers: this.getHeaders() });
     if (!res.ok) throw await toApiError(res, '인증키 목록 조회 실패');
