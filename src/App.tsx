@@ -575,7 +575,7 @@ export default function App() {
       />
 
       {/* Main Body */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div className="flex-1 flex relative">
         {/* Sidebar */}
         <Sidebar
           currentSection={currentSection}

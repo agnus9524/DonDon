@@ -182,7 +182,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Mobile Backdrop Overlay */}
       {isOpenMobile && (
         <div
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 md:hidden transition-opacity duration-200"
+          className="fixed inset-x-0 top-16 bottom-0 bg-slate-900/60 backdrop-blur-xs z-30 md:hidden transition-opacity duration-200"
           onClick={onCloseMobile}
           aria-hidden="true"
         />
@@ -190,8 +190,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 w-72 bg-white flex flex-col transition-transform duration-200 ease-in-out shadow-2xl
-          md:static md:w-64 md:shadow-none md:translate-x-0 md:min-h-[calc(100vh-4rem)] md:border-r md:border-slate-200/80
+          fixed top-16 bottom-0 left-0 z-30 w-72 pb-16 bg-white flex flex-col transition-transform duration-200 ease-in-out shadow-2xl
+          md:sticky md:top-16 md:self-start md:h-[calc(100vh-4rem)] md:pb-0 md:w-64 md:shrink-0 md:shadow-none md:translate-x-0 md:border-r md:border-slate-200/80
           ${isOpenMobile ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
         `}
       >
