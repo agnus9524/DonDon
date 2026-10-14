@@ -12,13 +12,16 @@ import React, { useState } from 'react';
 import { AlertTriangle, Building2, CheckCircle, Clock, KeyRound, LogOut, UserPlus, X } from 'lucide-react';
 import { Company, CompanyLicenseInfo, LicenseState, PendingJoinInfo, User } from '../types';
 
-// 입력을 XXXX-XXXX-XXXX-XXXX 모양으로 정리
+// 입력을 DON-XXXX-XXXX-XXXX-XXXX 모양으로 정리 (DON- 은 입력하지 않아도 자동으로 붙음)
 export function formatAuthKey(raw: string): string {
-  const clean = raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16);
-  return clean.match(/.{1,4}/g)?.join('-') || '';
+  let clean = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (clean.startsWith('DON')) clean = clean.slice(3);
+  clean = clean.slice(0, 16);
+  if (!clean) return '';
+  return `DON-${clean.match(/.{1,4}/g)!.join('-')}`;
 }
 
-const isCompleteKey = (key: string) => key.replace(/-/g, '').length === 16;
+const isCompleteKey = (key: string) => key.replace(/^DON-/, '').replace(/-/g, '').length === 16;
 
 const inputClass =
   'w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-semibold text-slate-900 placeholder:text-slate-400 placeholder:font-normal focus:outline-none focus:border-indigo-600';
@@ -158,7 +161,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({ user, pendingReq
                 <input
                   value={key}
                   onChange={(e) => setKey(formatAuthKey(e.target.value))}
-                  placeholder="XXXX-XXXX-XXXX-XXXX"
+                  placeholder="DON-XXXX-XXXX-XXXX-XXXX"
                   autoComplete="off"
                   spellCheck={false}
                   className={`${inputClass} font-mono tracking-widest text-center text-base`}
@@ -318,7 +321,7 @@ export const LicenseBlockedView: React.FC<LicenseBlockedViewProps> = ({ user, co
             <input
               value={key}
               onChange={(e) => setKey(formatAuthKey(e.target.value))}
-              placeholder="XXXX-XXXX-XXXX-XXXX"
+              placeholder="DON-XXXX-XXXX-XXXX-XXXX"
               autoComplete="off"
               spellCheck={false}
               className={`${inputClass} font-mono tracking-widest text-center text-base`}
@@ -413,7 +416,7 @@ export const RenewLicenseModal: React.FC<RenewLicenseModalProps> = ({ isOpen, on
           <input
             value={key}
             onChange={(e) => setKey(formatAuthKey(e.target.value))}
-            placeholder="XXXX-XXXX-XXXX-XXXX"
+            placeholder="DON-XXXX-XXXX-XXXX-XXXX"
             autoComplete="off"
             spellCheck={false}
             className={`${inputClass} font-mono tracking-widest text-center text-base`}
@@ -427,6 +430,132 @@ export const RenewLicenseModal: React.FC<RenewLicenseModalProps> = ({ isOpen, on
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+};
+
+// ────────────────────────────────────────────────────────────────
+// 대표 권한 인계 — 대표(라이선스 소유자)가 퇴사 등으로 회사의 다른 구성원에게 넘긴다
+// ────────────────────────────────────────────────────────────────
+
+interface TransferOwnerModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  companyName: string;
+  myEmail: string;
+  loadCandidates: () => Promise<{ id: string; email: string; name: string }[]>;
+  onTransfer: (toUserId: string) => Promise<void>;
+}
+
+export const TransferOwnerModal: React.FC<TransferOwnerModalProps> = ({ isOpen, onClose, companyName, myEmail, loadCandidates, onTransfer }) => {
+  const [candidates, setCandidates] = useState<{ id: string; email: string; name: string }[] | null>(null);
+  const [picked, setPicked] = useState<{ id: string; email: string; name: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    setCandidates(null);
+    setPicked(null);
+    setError(null);
+    loadCandidates()
+      .then(setCandidates)
+      .catch((err) => {
+        setCandidates([]);
+        setError(err.message || '구성원 목록을 불러오지 못했습니다.');
+      });
+  }, [isOpen, loadCandidates]);
+
+  if (!isOpen) return null;
+
+  const close = () => !busy && onClose();
+
+  const confirm = async () => {
+    if (!picked) return;
+    try {
+      setBusy(true);
+      setError(null);
+      await onTransfer(picked.id);
+      onClose();
+    } catch (err: any) {
+      setError(err.message || '인계에 실패했습니다.');
+      setPicked(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-4" onClick={close}>
+      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden text-slate-900" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-indigo-900 text-white px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <UserPlus className="w-5 h-5 text-amber-300" />
+            <h3 className="text-base font-bold">대표 권한 인계</h3>
+          </div>
+          <button onClick={close} className="text-slate-300 hover:text-white" aria-label="닫기">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {!picked ? (
+          <div className="p-6 space-y-4">
+            <p className="text-xs text-slate-600 leading-relaxed">
+              <strong className="text-slate-900">{companyName}</strong>의 인증키(라이선스)와 대표 관리자 권한을 회사의 다른 구성원에게
+              넘깁니다. 사용 기한은 그대로 이어집니다.
+            </p>
+            {error && <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold">{error}</div>}
+            {candidates === null ? (
+              <div className="py-6 text-center text-xs text-slate-400">불러오는 중...</div>
+            ) : candidates.length === 0 ? (
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 leading-relaxed">
+                넘겨받을 수 있는 구성원이 없습니다. 새 대표가 될 사람이 먼저 Google 계정으로 로그인해 회사 코드로 가입 신청하고, 승인을 받아야
+                합니다.
+              </div>
+            ) : (
+              <ul className="max-h-72 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
+                {candidates.map((m) => (
+                  <li key={m.id}>
+                    <button type="button" onClick={() => setPicked(m)} className="w-full text-left px-4 py-3 hover:bg-indigo-50 flex items-center justify-between gap-3">
+                      <span className="min-w-0">
+                        <span className="block text-sm font-bold text-slate-900 truncate">{m.name || m.email}</span>
+                        <span className="block text-xs text-slate-500 truncate">{m.email}</span>
+                      </span>
+                      <span className="text-xs font-bold text-indigo-600 shrink-0">선택</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <div className="p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-2 text-sm text-slate-600 leading-relaxed">
+                <p className="font-black text-slate-900">정말 대표 권한을 넘길까요?</p>
+                <p>
+                  {myEmail} → <strong className="text-indigo-700">{picked.email}</strong>
+                </p>
+                <p className="text-xs">
+                  넘긴 뒤에는 새 대표만 기간 연장과 인계를 할 수 있고, 되돌리려면 새 대표가 다시 넘겨줘야 합니다. 내 계정은 이 회사의 관리자로
+                  남으며, 퇴사한다면 새 대표가 사용자 관리에서 정지할 수 있습니다.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setPicked(null)} disabled={busy} className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+                뒤로
+              </button>
+              <button type="button" onClick={confirm} disabled={busy} className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-sm font-black text-white disabled:opacity-50">
+                {busy ? '처리 중...' : '대표 권한 넘기기'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

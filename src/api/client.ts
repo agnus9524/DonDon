@@ -140,7 +140,33 @@ class ApiClient {
     return (await res.json()).licenses;
   }
 
-  async updateLicense(id: string, payload: { status?: 'active' | 'suspended'; extend_days?: number }): Promise<LicenseRow> {
+  // 대표 인계 (현재 대표 본인)
+  async getTransferCandidates(): Promise<{ id: string; email: string; name: string }[]> {
+    const res = await authFetch('/api/v1/license/transfer-candidates', { headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '인계 대상 조회 실패');
+    return (await res.json()).candidates;
+  }
+
+  async transferLicense(toUserId: string): Promise<void> {
+    const res = await authFetch('/api/v1/license/transfer', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ to_user_id: toUserId }),
+    });
+    if (!res.ok) throw await toApiError(res, '대표 인계 실패');
+  }
+
+  // 대표 인계 (최고관리자가 대신)
+  async adminTransferLicense(licenseId: string, toUserId: string): Promise<void> {
+    const res = await authFetch(`/api/v1/super/licenses/${licenseId}/transfer`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ to_user_id: toUserId }),
+    });
+    if (!res.ok) throw await toApiError(res, '대표 인계 실패');
+  }
+
+  async updateLicense(id: string, payload: { status?: 'active' | 'suspended'; extend_days?: number; memo?: string }): Promise<LicenseRow> {
     const res = await authFetch(`/api/v1/super/licenses/${id}`, {
       method: 'PUT',
       headers: this.getHeaders(),

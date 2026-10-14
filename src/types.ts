@@ -452,13 +452,14 @@ export interface License {
   status: 'active' | 'suspended';
   expires_at: string;
   key: string; // 마지막으로 적용한 인증키
-  created_at: string;
+  memo?: string; // 최고관리자 메모 (슈퍼 관리자 패널에서 바로 작성)
+  created_at: string; // 시작일 (처음 인증한 날)
   updated_at: string;
 }
 
 // 인증키 — 최고관리자가 발급, 1회용 (한 번 쓰이면 그 계정에 귀속)
 export interface AuthKey {
-  id: string; // 키 문자열 XXXX-XXXX-XXXX-XXXX
+  id: string; // 키 문자열 DON-XXXX-XXXX-XXXX-XXXX (이전 발급분은 XXXX-XXXX-XXXX-XXXX)
   status: 'unused' | 'used';
   duration_days: number;
   memo?: string;
@@ -477,6 +478,8 @@ export interface LicenseRow extends License {
   company_name: string;
   company_code: string;
   member_count: number;
+  // 대표 인계 대상 후보 (이 회사의 활성 구성원, 현재 대표 제외)
+  members: { id: string; email: string; name: string }[];
 }
 
 // 회사 목록에 붙는 내 라이선스 요약

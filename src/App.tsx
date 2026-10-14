@@ -42,7 +42,7 @@ import { AdminVendorsView } from './components/AdminVendorsView';
 import { AdminPermissionsView } from './components/AdminPermissionsView';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { LoginView } from './components/LoginView';
-import { OnboardingView, LicenseBlockedView, RenewLicenseModal } from './components/LicenseGateView';
+import { OnboardingView, LicenseBlockedView, RenewLicenseModal, TransferOwnerModal } from './components/LicenseGateView';
 import { SuperAdminView } from './components/SuperAdminView';
 import { AlertCircle, Lock, KeyRound } from 'lucide-react';
 
@@ -56,6 +56,8 @@ export default function App() {
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [pendingRequests, setPendingRequests] = useState<PendingJoinInfo[]>([]);
   const [isRenewOpen, setIsRenewOpen] = useState(false);
+  const [isTransferOpen, setIsTransferOpen] = useState(false);
+  const loadTransferCandidates = useCallback(() => api.getTransferCandidates(), []);
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
@@ -565,6 +567,7 @@ export default function App() {
         currentRole={currentRole}
         license={currentMyCompany?.license || null}
         onOpenRenewLicense={() => setIsRenewOpen(true)}
+        onOpenTransferOwner={() => setIsTransferOpen(true)}
         onSelectCompany={handleSelectCompany}
         onOpenNewCompanyModal={() => setCurrentSection('admin-companies')}
         onOpenCompanySelector={() => setIsCompanySelectorOpen(true)}
@@ -832,6 +835,19 @@ export default function App() {
         companyName={currentCompany?.company_name || ''}
         expiresAt={currentMyCompany?.license.expires_at || null}
         onRenew={(key) => handleActivateLicense({ key })}
+      />
+
+      {/* 대표 관리자: 퇴사 등으로 대표 권한(인증키)을 다른 구성원에게 인계 */}
+      <TransferOwnerModal
+        isOpen={isTransferOpen}
+        onClose={() => setIsTransferOpen(false)}
+        companyName={currentCompany?.company_name || ''}
+        myEmail={currentUser?.email || ''}
+        loadCandidates={loadTransferCandidates}
+        onTransfer={async (toUserId) => {
+          await api.transferLicense(toUserId);
+          await loadInitialData();
+        }}
       />
 
       {/* Company Selector Modal (Prompt Requirement) */}

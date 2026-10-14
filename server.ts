@@ -337,14 +337,28 @@ const LICENSE_BLOCK_MESSAGES: Record<Exclude<LicenseState, 'active'>, string> = 
   expired: '이 회사의 라이선스 사용 기간이 만료되었습니다. 대표 관리자가 새 인증키로 연장해 주세요.',
 };
 
-// 인증키 생성: XXXX-XXXX-XXXX-XXXX (헷갈리는 글자 0/O/1/I 제외, 암호학적 난수 사용)
+// 인증키 형식: DON-XXXX-XXXX-XXXX-XXXX (leo100b의 LEO- 키와 구분)
+const AUTH_KEY_PREFIX = 'DON-';
+
+// 입력된 인증키를 저장된 키 ID로 찾는다.
+// 대소문자·띄어쓰기·하이픈 위치가 달라도 찾고, DON- 형식 이전에 발급된 키(접두어 없음)도 계속 쓸 수 있게 한다.
+function findAuthKey(input: unknown): AuthKey | undefined {
+  const compact = String(input ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!compact) return undefined;
+  const body = compact.startsWith('DON') && compact.length === 19 ? compact.slice(3) : compact;
+  const grouped = body.match(/.{1,4}/g)?.join('-') || '';
+  const candidates = new Set([`${AUTH_KEY_PREFIX}${grouped}`, grouped]);
+  return db.authKeys.find((k) => candidates.has(k.id));
+}
+
+// 인증키 생성: DON-XXXX-XXXX-XXXX-XXXX (헷갈리는 글자 0/O/1/I 제외, 암호학적 난수 사용)
 function generateAuthKeyText(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let text: string;
   do {
     const bytes = crypto.randomBytes(16);
     const chars = Array.from(bytes, (b: number) => alphabet[b % alphabet.length]);
-    text = [0, 4, 8, 12].map((i) => chars.slice(i, i + 4).join('')).join('-');
+    text = AUTH_KEY_PREFIX + [0, 4, 8, 12].map((i) => chars.slice(i, i + 4).join('')).join('-');
   } while (db.authKeys.some((k) => k.id === text));
   return text;
 }
@@ -701,11 +715,10 @@ async function startServer() {
       return res.status(400).json({ error: '최고관리자 계정은 인증키 인증이 필요하지 않습니다.' });
     }
 
-    const keyText = String(req.body?.key || '').trim().toUpperCase();
-    if (!keyText) {
+    if (!String(req.body?.key || '').trim()) {
       return res.status(400).json({ error: '인증키를 입력해 주세요.' });
     }
-    const authKey = db.authKeys.find((k) => k.id === keyText);
+    const authKey = findAuthKey(req.body?.key);
     if (!authKey) {
       return res.status(404).json({ error: '존재하지 않는 인증키입니다.' });
     }
@@ -747,7 +760,8 @@ async function startServer() {
       }
       const base = Math.max(Date.now(), new Date(ownedLicense.expires_at).getTime());
       ownedLicense.expires_at = new Date(base + durationDays * DAY_MS).toISOString();
-      ownedLicense.key = keyText;
+      ownedLicense.key = authKey.id;
+      if (!ownedLicense.memo && authKey.memo) ownedLicense.memo = authKey.memo;
       ownedLicense.updated_at = now;
       license = ownedLicense;
       company = db.companies.find((c) => c.id === ownedLicense.company_id)!;
@@ -785,7 +799,8 @@ async function startServer() {
         company_id: company.id,
         status: 'active',
         expires_at: new Date(Date.now() + durationDays * DAY_MS).toISOString(),
-        key: keyText,
+        key: authKey.id,
+        memo: authKey.memo,
         created_at: now,
         updated_at: now,
       };
@@ -811,6 +826,75 @@ async function startServer() {
     });
 
     res.status(renewed ? 200 : 201).json({ success: true, renewed, license, company });
+  });
+
+  // 대표 인계 후보: 이 회사의 활성 구성원 중 현재 대표가 아니고, 다른 회사 라이선스를 갖고 있지 않은 사람
+  function transferCandidates(license: License): User[] {
+    const memberIds = new Set(
+      db.userCompanyRoles
+        .filter((r) => r.company_id === license.company_id && r.status === 'ACTIVE')
+        .map((r) => r.user_id)
+    );
+    return db.users.filter(
+      (u) =>
+        memberIds.has(u.id) &&
+        u.id !== license.user_id &&
+        u.status !== 'SUSPENDED' &&
+        u.email.toLowerCase() !== SUPER_ADMIN_EMAIL &&
+        !db.licenses.some((l) => l.user_id === u.id && l.id !== license.id)
+    );
+  }
+
+  // 라이선스(인증키) 소유를 같은 회사의 다른 구성원에게 넘긴다.
+  // 새 대표는 회사 대표 관리자(ORG_ADMIN)가 되고, 이후 연장·인계도 새 대표가 한다.
+  // 이전 대표는 대표 관리자 역할만 남으며, 새 대표가 소속을 정지하거나 역할을 바꿀 수 있다.
+  function transferLicense(license: License, toUserId: string, req: TenantRequest): { ok: true } | { error: string; status: number } {
+    const target = transferCandidates(license).find((u) => u.id === toUserId);
+    if (!target) {
+      return { error: '인계할 수 없는 사용자입니다. 이 회사에 소속된(승인된) 다른 구성원만 선택할 수 있습니다.', status: 400 };
+    }
+    const previous = db.users.find((u) => u.id === license.user_id);
+    const now = nowIso();
+    license.user_id = target.id;
+    license.email = target.email;
+    license.updated_at = now;
+
+    const role = db.userCompanyRoles.find((r) => r.user_id === target.id && r.company_id === license.company_id);
+    if (role) {
+      role.role_id = 'ORG_ADMIN';
+      role.status = 'ACTIVE';
+      role.updated_at = now;
+    }
+
+    db.addAuditLog({
+      company_id: license.company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'UPDATE',
+      entity_type: 'LICENSE',
+      entity_id: license.id,
+      before_data: { owner: previous?.email || license.email },
+      after_data: { owner: target.email, transferred_by: req.user!.email },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+    return { ok: true };
+  }
+
+  // 대표 인계 후보 조회 (현재 대표 본인)
+  app.get('/api/v1/license/transfer-candidates', (req: TenantRequest, res: Response) => {
+    const license = db.licenses.find((l) => l.user_id === req.user!.id);
+    if (!license) return res.status(403).json({ error: '회사 대표(라이선스 소유자)만 인계할 수 있습니다.' });
+    res.json({ candidates: transferCandidates(license).map((u) => ({ id: u.id, email: u.email, name: u.name })) });
+  });
+
+  // 대표 인계 (현재 대표 본인이 회사의 다른 구성원에게)
+  app.post('/api/v1/license/transfer', (req: TenantRequest, res: Response) => {
+    const license = db.licenses.find((l) => l.user_id === req.user!.id);
+    if (!license) return res.status(403).json({ error: '회사 대표(라이선스 소유자)만 인계할 수 있습니다.' });
+    const result = transferLicense(license, String(req.body?.to_user_id || ''), req);
+    if ('error' in result) return res.status(result.status).json({ error: result.error });
+    res.json({ success: true });
   });
 
   // Request Join Company Endpoint — 로그인한 사용자가 회사 코드로 소속 가입을 신청
@@ -895,9 +979,10 @@ async function startServer() {
           company_name: company?.company_name || '(삭제된 회사)',
           company_code: company?.company_code || '',
           member_count: db.userCompanyRoles.filter((r) => r.company_id === lic.company_id && r.status === 'ACTIVE').length,
+          members: transferCandidates(lic).map((u) => ({ id: u.id, email: u.email, name: u.name })),
         };
       })
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
     res.json({ licenses: rows });
   });
 
@@ -906,8 +991,12 @@ async function startServer() {
     if (!license) {
       return res.status(404).json({ error: '라이선스를 찾을 수 없습니다.' });
     }
-    const before = { status: license.status, expires_at: license.expires_at };
-    const { status, extend_days } = req.body || {};
+    const before = { status: license.status, expires_at: license.expires_at, memo: license.memo };
+    const { status, extend_days, memo } = req.body || {};
+
+    if (memo !== undefined) {
+      license.memo = String(memo ?? '').trim().slice(0, 200) || undefined;
+    }
 
     if (status !== undefined) {
       if (status !== 'active' && status !== 'suspended') {
@@ -935,11 +1024,22 @@ async function startServer() {
       entity_type: 'LICENSE',
       entity_id: license.id,
       before_data: before,
-      after_data: { status: license.status, expires_at: license.expires_at },
+      after_data: { status: license.status, expires_at: license.expires_at, memo: license.memo },
       ip_address: req.ip,
       user_agent: req.headers['user-agent'],
     });
 
+    res.json({ success: true, license: { ...license, state: getLicenseState(license) } });
+  });
+
+  // 대표 인계 (최고관리자): 대표가 퇴사해 로그인할 수 없을 때 최고관리자가 대신 넘겨준다
+  app.post('/api/v1/super/licenses/:id/transfer', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const license = db.licenses.find((l) => l.id === req.params.id);
+    if (!license) {
+      return res.status(404).json({ error: '라이선스를 찾을 수 없습니다.' });
+    }
+    const result = transferLicense(license, String(req.body?.to_user_id || ''), req);
+    if ('error' in result) return res.status(result.status).json({ error: result.error });
     res.json({ success: true, license: { ...license, state: getLicenseState(license) } });
   });
 

@@ -18,6 +18,7 @@ import {
   Sliders,
   ExternalLink,
   Menu,
+  Users,
 } from 'lucide-react';
 
 interface TopNavbarProps {
@@ -29,6 +30,7 @@ interface TopNavbarProps {
   // 현재 회사의 라이선스 요약 (최고관리자에게는 표시하지 않음)
   license?: CompanyLicenseInfo | null;
   onOpenRenewLicense?: () => void;
+  onOpenTransferOwner?: () => void;
   onSelectCompany: (companyId: string) => void;
   onOpenNewCompanyModal: () => void;
   onOpenCompanySelector: () => void;
@@ -46,6 +48,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   currentRole,
   license,
   onOpenRenewLicense,
+  onOpenTransferOwner,
   onSelectCompany,
   onOpenNewCompanyModal,
   onOpenCompanySelector,
@@ -282,6 +285,18 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                     >
                       <KeyRound className="w-3.5 h-3.5" />
                       <span>인증키로 기간 연장</span>
+                    </button>
+                  )}
+                  {license.is_owner && onOpenTransferOwner && (
+                    <button
+                      onClick={() => {
+                        setUserDropdownOpen(false);
+                        onOpenTransferOwner();
+                      }}
+                      className="w-full py-1.5 px-3 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      <span>대표 권한 인계</span>
                     </button>
                   )}
                 </div>
