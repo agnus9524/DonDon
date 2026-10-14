@@ -1,11 +1,35 @@
 @import "tailwindcss";
 
+/* 전체 글꼴: Pretendard (선명한 한글 고딕).
+   화면 곳곳의 font-sans 클래스도 이 글꼴을 쓰도록 Tailwind 기본 글꼴을 바꾼다.
+   (이전에는 font-sans가 윈도우 기본 '맑은 고딕'으로 바뀌어 글씨가 뿌옇게 보였다) */
+@theme {
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+}
+
 @layer base {
+  html,
   body {
-    font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+    font-family: var(--font-sans);
+  }
+  body {
     color: #1e293b;
     background-color: #f8fafc;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  /* 금액·숫자는 자릿수가 맞도록 고정폭 숫자 */
+  table,
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+  /* 입력칸·버튼도 같은 글꼴 */
+  input,
+  select,
+  textarea,
+  button {
+    font-family: inherit;
   }
 }
 
