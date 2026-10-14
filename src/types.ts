@@ -346,7 +346,8 @@ export interface AuditLog {
   company_id: string;
   user_id: string;
   action: 'CREATE' | 'UPDATE' | 'DELETE' | 'CONFIRM' | 'CANCEL' | 'CLOSE_PERIOD' | 'IMPORT' | 'LOGIN' | 'APPROVE' | 'SUSPEND' | 'ACTIVATE';
-  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR' | 'AUTH' | 'USER_COMPANY_ROLE_REQUEST' | 'USER_STATUS' | 'USER' | 'LICENSE' | 'AUTH_KEY';
+  entity_type: 'TRANSACTION' | 'BUDGET' | 'FISCAL_PERIOD' | 'BANK_ACCOUNT' | 'COMPANY' | 'USER_ROLE' | 'TEAM' | 'ACCOUNT' | 'VENDOR' | 'AUTH' | 'USER_COMPANY_ROLE_REQUEST' | 'USER_STATUS' | 'USER' | 'LICENSE' | 'AUTH_KEY'
+    | 'EXTENSION_REQUEST';
   entity_id: string;
   before_data?: any;
   after_data?: any;
@@ -471,6 +472,54 @@ export interface AuthKey {
   company_id?: string;
 }
 
+// 사용 기간 연장 요청 — 대표가 요청 → 최고관리자가 입금 확인 후 승인 → 영수증 발급
+export type ExtensionPlan = '1m' | '1y';
+export type ExtensionRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+export interface ExtensionRequest {
+  id: string;
+  license_id: string;
+  company_id: string;
+  company_name: string;
+  user_id: string; // 요청한 대표
+  email: string;
+  plan: ExtensionPlan;
+  days: number; // 1달 30일, 1년 365일
+  amount: number; // 요청 시점의 가격(원)
+  depositor_name: string; // 입금자명
+  status: ExtensionRequestStatus;
+  created_at: string;
+  processed_at?: string;
+  processed_by?: string;
+  reject_reason?: string;
+  // 승인 시 채워짐
+  receipt_no?: string;
+  period_from?: string; // 연장 전 만료일(또는 승인일)
+  period_to?: string; // 연장 후 만료일
+}
+
+// 요금·입금 계좌·영수증 발행자 정보 (최고관리자가 패널에서 설정)
+export interface BillingSettings {
+  price_month: number; // 1달 요금(원), 0이면 미설정
+  price_year: number; // 1년 요금(원), 0이면 미설정
+  bank_name: string;
+  bank_account: string;
+  bank_holder: string;
+  issuer_name: string; // 영수증 공급자 상호
+  issuer_biz_no: string;
+  issuer_ceo: string;
+  issuer_address: string;
+  issuer_contact: string;
+  updated_at?: string;
+}
+
+// 영수증 한 장에 필요한 정보
+export interface ExtensionReceipt {
+  request: ExtensionRequest;
+  issuer: Pick<BillingSettings, 'issuer_name' | 'issuer_biz_no' | 'issuer_ceo' | 'issuer_address' | 'issuer_contact'>;
+  customer: { company_name: string; business_number: string; representative_name: string; address: string; email: string };
+}
+
 // 최고관리자 패널용 조회 모델
 export interface LicenseRow extends License {
   state: LicenseState;
@@ -507,4 +556,5 @@ export interface MeResponse {
   roles: UserCompanyRole[];
   companies: (Company & { my_role: string; license: CompanyLicenseInfo })[];
   pending_requests: PendingJoinInfo[];
+  pending_extension_count?: number; // 최고관리자에게만: 대기 중인 연장 요청 수
 }

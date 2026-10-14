@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, AlertTriangle, Check, Copy, Download, Plus, RefreshCw, Search, ShieldCheck, UserCog, X } from 'lucide-react';
 import { api } from '../api/client';
 import { AuthKey, LicenseRow, LicenseState } from '../types';
+import { SuperExtensionRequests } from './ExtensionViews';
 
 type AuthKeyRow = AuthKey & { company_name?: string };
 
@@ -219,7 +220,7 @@ const OwnerChangeDialog: React.FC<{
 
 // ────────────────────────────────────────────────────────────────
 
-export const SuperAdminView: React.FC = () => {
+export const SuperAdminView: React.FC<{ onActivity?: () => void }> = ({ onActivity }) => {
   const [licenses, setLicenses] = useState<LicenseRow[]>([]);
   const [authKeys, setAuthKeys] = useState<AuthKeyRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -231,6 +232,7 @@ export const SuperAdminView: React.FC = () => {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [ownerTarget, setOwnerTarget] = useState<LicenseRow | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // 인증키 발급 옵션
   const [newKeyDays, setNewKeyDays] = useState(30);
@@ -250,11 +252,14 @@ export const SuperAdminView: React.FC = () => {
       setLicenses(lics);
       setAuthKeys(keys);
       setStorage(storageStatus);
+      setReloadKey((k) => k + 1);
+      onActivity?.();
     } catch (err: any) {
       setNotice({ type: 'error', text: err.message || '데이터를 불러오지 못했습니다.' });
     } finally {
       setIsLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -520,6 +525,9 @@ export const SuperAdminView: React.FC = () => {
           </button>
         </div>
       )}
+
+      {/* 연장 요청 (사용자가 요청 → 입금 확인 후 승인) */}
+      <SuperExtensionRequests ask={ask} reloadKey={reloadKey} onChanged={refresh} onNotice={setNotice} />
 
       {/* 인증키 발급 */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">

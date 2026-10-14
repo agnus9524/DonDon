@@ -54,6 +54,9 @@ import {
   License,
   AuthKey,
   LicenseState,
+  ExtensionRequest,
+  ExtensionPlan,
+  BillingSettings,
 } from './src/types';
 
 // ────────────────────────────────────────────────────────────────
@@ -178,7 +181,24 @@ const PERSISTED_TABLES = [
   'auditLogs',
   'licenses',
   'authKeys',
+  'extensionRequests',
 ] as const;
+
+const DEFAULT_BILLING: BillingSettings = {
+  price_month: 0,
+  price_year: 0,
+  bank_name: '',
+  bank_account: '',
+  bank_holder: '',
+  issuer_name: '',
+  issuer_biz_no: '',
+  issuer_ceo: '',
+  issuer_address: '',
+  issuer_contact: '',
+};
+
+const PLAN_DAYS: Record<ExtensionPlan, number> = { '1m': 30, '1y': 365 };
+const PLAN_LABEL: Record<ExtensionPlan, string> = { '1m': '1개월', '1y': '1년' };
 
 class AccountingDatabase {
   // 인증/권한
@@ -213,6 +233,8 @@ class AccountingDatabase {
   // 라이선스 / 인증키
   licenses: License[] = [];
   authKeys: AuthKey[] = [];
+  extensionRequests: ExtensionRequest[] = [];
+  billing: BillingSettings = { ...DEFAULT_BILLING };
 
   private saveTimer: NodeJS.Timeout | null = null;
 
@@ -234,6 +256,9 @@ class AccountingDatabase {
         (this as any)[table] = saved[table];
       }
     }
+    if (saved.billing && typeof saved.billing === 'object') {
+      this.billing = { ...DEFAULT_BILLING, ...(saved.billing as Partial<BillingSettings>) };
+    }
     // 예전 데이터 보정: 회사가 추가한 계정과목인데 소유 회사가 비어 있으면, 처음 등록한 회사로 채운다
     for (const acc of this.accounts) {
       if (acc.is_system || acc.company_id) continue;
@@ -249,6 +274,7 @@ class AccountingDatabase {
     for (const table of PERSISTED_TABLES) {
       snapshot[table] = (this as any)[table];
     }
+    snapshot.billing = this.billing;
     return snapshot;
   }
 
@@ -705,6 +731,8 @@ async function startServer() {
         };
       }),
       pending_requests: pendingRequests,
+      // 최고관리자: 처리 대기 중인 연장 요청 수 (알림 배지)
+      pending_extension_count: req.isSuperAdmin ? db.extensionRequests.filter((r) => r.status === 'pending').length : undefined,
     });
   });
 
@@ -895,6 +923,202 @@ async function startServer() {
     const result = transferLicense(license, String(req.body?.to_user_id || ''), req);
     if ('error' in result) return res.status(result.status).json({ error: result.error });
     res.json({ success: true });
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // 사용 기간 연장 요청 → 최고관리자 입금 확인·승인 → 영수증
+  // ────────────────────────────────────────────────────────────────
+
+  const priceOf = (plan: ExtensionPlan) => (plan === '1y' ? db.billing.price_year : db.billing.price_month);
+
+  // 요금·입금 계좌 안내 (로그인한 누구나 — 만료된 회사의 대표도 볼 수 있어야 한다)
+  app.get('/api/v1/billing/info', (req: TenantRequest, res: Response) => {
+    const b = db.billing;
+    res.json({
+      price_month: b.price_month,
+      price_year: b.price_year,
+      bank_name: b.bank_name,
+      bank_account: b.bank_account,
+      bank_holder: b.bank_holder,
+    });
+  });
+
+  // 내 회사(대표)의 연장 요청 내역
+  app.get('/api/v1/license/extension-requests', (req: TenantRequest, res: Response) => {
+    const license = db.licenses.find((l) => l.user_id === req.user!.id);
+    if (!license) return res.status(403).json({ error: '회사 대표(라이선스 소유자)만 볼 수 있습니다.' });
+    const list = db.extensionRequests
+      .filter((r) => r.license_id === license.id)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    res.json({ requests: list });
+  });
+
+  // 연장 요청 (대표)
+  app.post('/api/v1/license/extension-requests', (req: TenantRequest, res: Response) => {
+    const license = db.licenses.find((l) => l.user_id === req.user!.id);
+    if (!license) return res.status(403).json({ error: '회사 대표(라이선스 소유자)만 연장을 요청할 수 있습니다.' });
+    const plan = req.body?.plan as ExtensionPlan;
+    if (plan !== '1m' && plan !== '1y') return res.status(400).json({ error: '연장 기간(1개월 또는 1년)을 선택해 주세요.' });
+    const amount = priceOf(plan);
+    if (!amount) return res.status(400).json({ error: '아직 요금이 정해지지 않았습니다. 관리자에게 문의해 주세요.' });
+    const depositor = String(req.body?.depositor_name || '').trim().slice(0, 40);
+    if (!depositor) return res.status(400).json({ error: '입금자명을 입력해 주세요.' });
+    if (db.extensionRequests.some((r) => r.license_id === license.id && r.status === 'pending')) {
+      return res.status(409).json({ error: '이미 처리 대기 중인 연장 요청이 있습니다. 먼저 요청을 취소하거나 처리를 기다려 주세요.' });
+    }
+    const company = db.companies.find((c) => c.id === license.company_id);
+    const request: ExtensionRequest = {
+      id: `ext_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+      license_id: license.id,
+      company_id: license.company_id,
+      company_name: company?.company_name || '',
+      user_id: req.user!.id,
+      email: req.user!.email,
+      plan,
+      days: PLAN_DAYS[plan],
+      amount,
+      depositor_name: depositor,
+      status: 'pending',
+      created_at: nowIso(),
+    };
+    db.extensionRequests.push(request);
+    db.addAuditLog({
+      company_id: license.company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'CREATE',
+      entity_type: 'EXTENSION_REQUEST',
+      entity_id: request.id,
+      after_data: { plan, amount, depositor_name: depositor },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+    res.json({ success: true, request });
+  });
+
+  // 연장 요청 취소 (대표, 대기 중일 때만)
+  app.post('/api/v1/license/extension-requests/:id/cancel', (req: TenantRequest, res: Response) => {
+    const license = db.licenses.find((l) => l.user_id === req.user!.id);
+    const request = db.extensionRequests.find((r) => r.id === req.params.id);
+    if (!license || !request || request.license_id !== license.id) return res.status(404).json({ error: '요청을 찾을 수 없습니다.' });
+    if (request.status !== 'pending') return res.status(400).json({ error: '이미 처리된 요청입니다.' });
+    request.status = 'cancelled';
+    request.processed_at = nowIso();
+    request.processed_by = req.user!.email;
+    res.json({ success: true, request });
+  });
+
+  // 영수증 (승인된 요청만 — 그 회사의 현재 대표·대표 관리자, 또는 최고관리자)
+  app.get('/api/v1/license/extension-requests/:id/receipt', (req: TenantRequest, res: Response) => {
+    const request = db.extensionRequests.find((r) => r.id === req.params.id);
+    if (!request) return res.status(404).json({ error: '요청을 찾을 수 없습니다.' });
+    const isCompanyAdminOf = db.userCompanyRoles.some(
+      (r) => r.user_id === req.user!.id && r.company_id === request.company_id && r.status === 'ACTIVE' && r.role_id === 'ORG_ADMIN'
+    );
+    const isOwner = db.licenses.some((l) => l.id === request.license_id && l.user_id === req.user!.id);
+    if (!req.isSuperAdmin && !isOwner && !isCompanyAdminOf) return res.status(403).json({ error: '영수증을 볼 권한이 없습니다.' });
+    if (request.status !== 'approved') return res.status(400).json({ error: '입금 확인(승인)된 요청만 영수증을 발급할 수 있습니다.' });
+    const company = db.companies.find((c) => c.id === request.company_id);
+    const b = db.billing;
+    res.json({
+      request,
+      issuer: {
+        issuer_name: b.issuer_name,
+        issuer_biz_no: b.issuer_biz_no,
+        issuer_ceo: b.issuer_ceo,
+        issuer_address: b.issuer_address,
+        issuer_contact: b.issuer_contact,
+      },
+      customer: {
+        company_name: company?.company_name || request.company_name,
+        business_number: company?.business_number || '',
+        representative_name: company?.representative_name || '',
+        address: company?.address || '',
+        email: request.email,
+      },
+    });
+  });
+
+  // ── 최고관리자 ──
+
+  app.get('/api/v1/super/extension-requests', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const list = [...db.extensionRequests].sort((a, b) => {
+      if ((a.status === 'pending') !== (b.status === 'pending')) return a.status === 'pending' ? -1 : 1;
+      return b.created_at.localeCompare(a.created_at);
+    });
+    res.json({ requests: list });
+  });
+
+  // 입금 확인 후 승인 → 기간 연장 + 영수증 번호 발급
+  app.post('/api/v1/super/extension-requests/:id/approve', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const request = db.extensionRequests.find((r) => r.id === req.params.id);
+    if (!request) return res.status(404).json({ error: '요청을 찾을 수 없습니다.' });
+    if (request.status !== 'pending') return res.status(400).json({ error: '이미 처리된 요청입니다.' });
+    const license = db.licenses.find((l) => l.id === request.license_id);
+    if (!license) return res.status(404).json({ error: '이 요청의 라이선스가 삭제되었습니다. 요청을 반려해 주세요.' });
+
+    const now = new Date();
+    const base = Math.max(now.getTime(), new Date(license.expires_at).getTime());
+    const nextExpiry = new Date(base + request.days * 24 * 60 * 60 * 1000).toISOString();
+    const before = license.expires_at;
+    license.expires_at = nextExpiry;
+    license.updated_at = now.toISOString();
+
+    const day = now.toISOString().slice(0, 10).replace(/-/g, '');
+    const seq = db.extensionRequests.filter((r) => r.receipt_no?.startsWith(`R-${day}-`)).length + 1;
+    request.status = 'approved';
+    request.processed_at = now.toISOString();
+    request.processed_by = req.user!.email;
+    request.receipt_no = `R-${day}-${String(seq).padStart(3, '0')}`;
+    request.period_from = new Date(base).toISOString();
+    request.period_to = nextExpiry;
+
+    db.addAuditLog({
+      company_id: license.company_id,
+      user_id: req.user!.id,
+      user_name: req.user!.name,
+      action: 'UPDATE',
+      entity_type: 'LICENSE',
+      entity_id: license.id,
+      before_data: { expires_at: before },
+      after_data: { expires_at: nextExpiry, extension_request: request.id, amount: request.amount },
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    });
+    res.json({ success: true, request });
+  });
+
+  app.post('/api/v1/super/extension-requests/:id/reject', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const request = db.extensionRequests.find((r) => r.id === req.params.id);
+    if (!request) return res.status(404).json({ error: '요청을 찾을 수 없습니다.' });
+    if (request.status !== 'pending') return res.status(400).json({ error: '이미 처리된 요청입니다.' });
+    request.status = 'rejected';
+    request.processed_at = nowIso();
+    request.processed_by = req.user!.email;
+    request.reject_reason = String(req.body?.reason || '').trim().slice(0, 200) || undefined;
+    res.json({ success: true, request });
+  });
+
+  app.get('/api/v1/super/billing-settings', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    res.json({ settings: db.billing });
+  });
+
+  app.put('/api/v1/super/billing-settings', requireSuperAdmin, (req: TenantRequest, res: Response) => {
+    const body = req.body || {};
+    const next: BillingSettings = { ...db.billing };
+    for (const key of ['price_month', 'price_year'] as const) {
+      if (body[key] !== undefined) {
+        const n = Math.round(Number(body[key]));
+        if (!Number.isFinite(n) || n < 0 || n > 100_000_000) return res.status(400).json({ error: '요금은 0원 ~ 1억원 사이로 입력해 주세요.' });
+        next[key] = n;
+      }
+    }
+    for (const key of ['bank_name', 'bank_account', 'bank_holder', 'issuer_name', 'issuer_biz_no', 'issuer_ceo', 'issuer_address', 'issuer_contact'] as const) {
+      if (body[key] !== undefined) next[key] = String(body[key] ?? '').trim().slice(0, 120);
+    }
+    next.updated_at = nowIso();
+    db.billing = next;
+    res.json({ success: true, settings: db.billing });
   });
 
   // Request Join Company Endpoint — 로그인한 사용자가 회사 코드로 소속 가입을 신청

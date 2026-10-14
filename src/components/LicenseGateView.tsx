@@ -262,11 +262,23 @@ interface LicenseBlockedViewProps {
   company: Company & { license: CompanyLicenseInfo; my_role?: string };
   otherCompanies: (Company & { license: CompanyLicenseInfo })[];
   onRenew: (key: string) => Promise<void>;
+  // 대표: 관리자에게 기간 연장 요청 (입금 후 승인)
+  onRequestExtension?: () => void;
+  extensionModal?: React.ReactNode;
   onSelectCompany: (companyId: string) => void;
   onLogout: () => void;
 }
 
-export const LicenseBlockedView: React.FC<LicenseBlockedViewProps> = ({ user, company, otherCompanies, onRenew, onSelectCompany, onLogout }) => {
+export const LicenseBlockedView: React.FC<LicenseBlockedViewProps> = ({
+  user,
+  company,
+  otherCompanies,
+  onRenew,
+  onRequestExtension,
+  extensionModal,
+  onSelectCompany,
+  onLogout,
+}) => {
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -310,10 +322,27 @@ export const LicenseBlockedView: React.FC<LicenseBlockedViewProps> = ({ user, co
         <p className="text-sm text-slate-700 leading-relaxed">
           {state === 'suspended'
             ? '운영자가 이 회사의 라이선스를 중지했습니다. 프로그램 운영자에게 문의해 주세요.'
+            : canRenew && company.license.is_owner && onRequestExtension
+            ? '기간 연장을 요청하고 입금하면, 관리자가 확인한 뒤 바로 다시 사용할 수 있습니다. 입력해 둔 회계 자료는 그대로 유지됩니다.'
             : canRenew
             ? '운영자에게 새 인증키를 받아 아래에 입력하면 바로 다시 사용할 수 있습니다. 입력해 둔 회계 자료는 그대로 유지됩니다.'
             : '회사의 대표 관리자가 새 인증키로 인증하면 다시 사용할 수 있습니다. 대표 관리자에게 알려 주세요.'}
         </p>
+
+        {canRenew && company.license.is_owner && onRequestExtension && (
+          <button
+            type="button"
+            onClick={onRequestExtension}
+            className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-md transition-colors"
+          >
+            <Clock className="w-4 h-4 text-amber-300" />
+            기간 연장 요청
+          </button>
+        )}
+
+        {canRenew && company.license.is_owner && onRequestExtension && (
+          <div className="text-[11px] font-bold text-slate-500 text-center">또는 관리자에게 받은 인증키 입력</div>
+        )}
 
         {canRenew && (
           <form onSubmit={submit} className="space-y-3">
@@ -355,6 +384,7 @@ export const LicenseBlockedView: React.FC<LicenseBlockedViewProps> = ({ user, co
           </div>
         )}
       </div>
+      {extensionModal}
     </GateShell>
   );
 };

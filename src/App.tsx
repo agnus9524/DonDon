@@ -43,6 +43,7 @@ import { AdminPermissionsView } from './components/AdminPermissionsView';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { LoginView } from './components/LoginView';
 import { OnboardingView, LicenseBlockedView, RenewLicenseModal, TransferOwnerModal } from './components/LicenseGateView';
+import { ExtensionRequestModal } from './components/ExtensionViews';
 import { SuperAdminView } from './components/SuperAdminView';
 import { AlertCircle, Lock, KeyRound } from 'lucide-react';
 
@@ -57,6 +58,8 @@ export default function App() {
   const [pendingRequests, setPendingRequests] = useState<PendingJoinInfo[]>([]);
   const [isRenewOpen, setIsRenewOpen] = useState(false);
   const [isTransferOpen, setIsTransferOpen] = useState(false);
+  const [isExtensionOpen, setIsExtensionOpen] = useState(false);
+  const [pendingExtensionCount, setPendingExtensionCount] = useState(0);
   const loadTransferCandidates = useCallback(() => api.getTransferCandidates(), []);
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -156,6 +159,7 @@ export default function App() {
       setIsSuperAdmin(meData.is_super_admin);
       setUserCompanies(meData.companies);
       setPendingRequests(meData.pending_requests);
+      setPendingExtensionCount(meData.pending_extension_count || 0);
 
       // 소속 회사가 없는 일반 사용자 → 인증키 입력 / 가입 신청 화면
       if (!meData.is_super_admin && meData.companies.length === 0) {
@@ -271,6 +275,22 @@ export default function App() {
     api.setCompany(result.company.id);
     await loadInitialData();
   };
+
+  // 최고관리자: 연장 요청 알림 수를 1분마다 확인
+  const refreshPendingExtensions = useCallback(async () => {
+    try {
+      const meData = await api.getMe();
+      setPendingExtensionCount(meData.pending_extension_count || 0);
+    } catch {
+      // 다음 확인 때 다시 시도
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    const timer = setInterval(refreshPendingExtensions, 60 * 1000);
+    return () => clearInterval(timer);
+  }, [isSuperAdmin, refreshPendingExtensions]);
 
   const handleRequestJoinCompany = async (payload: { company_code: string; reason: string }) => {
     await api.requestJoinCompany(payload);
@@ -547,11 +567,20 @@ export default function App() {
         company={currentMyCompany}
         otherCompanies={userCompanies.filter((c) => c.id !== currentMyCompany.id)}
         onRenew={(key) => handleActivateLicense({ key })}
+        onRequestExtension={() => setIsExtensionOpen(true)}
         onSelectCompany={async (companyId) => {
           api.setCompany(companyId);
           await loadInitialData();
         }}
         onLogout={handleLogout}
+        extensionModal={
+          <ExtensionRequestModal
+            isOpen={isExtensionOpen}
+            onClose={() => setIsExtensionOpen(false)}
+            companyName={currentMyCompany.company_name}
+            expiresAt={currentMyCompany.license.expires_at}
+          />
+        }
       />
     );
   }
@@ -568,6 +597,9 @@ export default function App() {
         license={currentMyCompany?.license || null}
         onOpenRenewLicense={() => setIsRenewOpen(true)}
         onOpenTransferOwner={() => setIsTransferOpen(true)}
+        onOpenExtensionRequest={() => setIsExtensionOpen(true)}
+        pendingExtensionCount={pendingExtensionCount}
+        onOpenSuperPanel={() => setCurrentSection('admin-super')}
         onSelectCompany={handleSelectCompany}
         onOpenNewCompanyModal={() => setCurrentSection('admin-companies')}
         onOpenCompanySelector={() => setIsCompanySelectorOpen(true)}
@@ -612,7 +644,7 @@ export default function App() {
           )}
 
           {/* 슈퍼 관리자 패널: 회사 선택과 무관하게 최고관리자에게만 열린다 */}
-          {currentSection === 'admin-super' && isSuperAdmin && <SuperAdminView />}
+          {currentSection === 'admin-super' && isSuperAdmin && <SuperAdminView onActivity={refreshPendingExtensions} />}
 
           {!currentCompany && isSuperAdmin && currentSection !== 'admin-super' && (
             <div className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center max-w-lg mx-auto my-12 shadow-sm">
@@ -835,6 +867,18 @@ export default function App() {
         companyName={currentCompany?.company_name || ''}
         expiresAt={currentMyCompany?.license.expires_at || null}
         onRenew={(key) => handleActivateLicense({ key })}
+      />
+
+      {/* 대표 관리자: 기간 연장 요청 (입금 확인 후 관리자가 연장) */}
+      <ExtensionRequestModal
+        isOpen={isExtensionOpen}
+        onClose={() => setIsExtensionOpen(false)}
+        companyName={currentCompany?.company_name || ''}
+        expiresAt={currentMyCompany?.license.expires_at || null}
+        onUseKey={() => {
+          setIsExtensionOpen(false);
+          setIsRenewOpen(true);
+        }}
       />
 
       {/* 대표 관리자: 퇴사 등으로 대표 권한(인증키)을 다른 구성원에게 인계 */}

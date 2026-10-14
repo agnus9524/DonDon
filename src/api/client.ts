@@ -30,6 +30,10 @@ import {
   LicenseRow,
   AuthConfig,
   MeResponse,
+  ExtensionRequest,
+  ExtensionPlan,
+  BillingSettings,
+  ExtensionReceipt,
 } from '../types';
 import { getAuthorizationHeader } from '../services/authSession';
 
@@ -179,6 +183,77 @@ class ApiClient {
   async deleteLicense(id: string): Promise<void> {
     const res = await authFetch(`/api/v1/super/licenses/${id}`, { method: 'DELETE', headers: this.getHeaders() });
     if (!res.ok) throw await toApiError(res, '라이선스 삭제 실패');
+  }
+
+  // ── 사용 기간 연장 요청 / 영수증 ──
+  async getBillingInfo(): Promise<Pick<BillingSettings, 'price_month' | 'price_year' | 'bank_name' | 'bank_account' | 'bank_holder'>> {
+    const res = await authFetch('/api/v1/billing/info', { headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '요금 정보 조회 실패');
+    return res.json();
+  }
+
+  async getMyExtensionRequests(): Promise<ExtensionRequest[]> {
+    const res = await authFetch('/api/v1/license/extension-requests', { headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '연장 요청 내역 조회 실패');
+    return (await res.json()).requests;
+  }
+
+  async requestExtension(payload: { plan: ExtensionPlan; depositor_name: string }): Promise<ExtensionRequest> {
+    const res = await authFetch('/api/v1/license/extension-requests', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw await toApiError(res, '연장 요청 실패');
+    return (await res.json()).request;
+  }
+
+  async cancelExtensionRequest(id: string): Promise<void> {
+    const res = await authFetch(`/api/v1/license/extension-requests/${id}/cancel`, { method: 'POST', headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '요청 취소 실패');
+  }
+
+  async getExtensionReceipt(id: string): Promise<ExtensionReceipt> {
+    const res = await authFetch(`/api/v1/license/extension-requests/${id}/receipt`, { headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '영수증 조회 실패');
+    return res.json();
+  }
+
+  async getAllExtensionRequests(): Promise<ExtensionRequest[]> {
+    const res = await authFetch('/api/v1/super/extension-requests', { headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '연장 요청 목록 조회 실패');
+    return (await res.json()).requests;
+  }
+
+  async approveExtensionRequest(id: string): Promise<ExtensionRequest> {
+    const res = await authFetch(`/api/v1/super/extension-requests/${id}/approve`, { method: 'POST', headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '승인 실패');
+    return (await res.json()).request;
+  }
+
+  async rejectExtensionRequest(id: string, reason: string): Promise<void> {
+    const res = await authFetch(`/api/v1/super/extension-requests/${id}/reject`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ reason }),
+    });
+    if (!res.ok) throw await toApiError(res, '반려 실패');
+  }
+
+  async getBillingSettings(): Promise<BillingSettings> {
+    const res = await authFetch('/api/v1/super/billing-settings', { headers: this.getHeaders() });
+    if (!res.ok) throw await toApiError(res, '요금 설정 조회 실패');
+    return (await res.json()).settings;
+  }
+
+  async saveBillingSettings(settings: Partial<BillingSettings>): Promise<BillingSettings> {
+    const res = await authFetch('/api/v1/super/billing-settings', {
+      method: 'PUT',
+      headers: this.getHeaders(),
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) throw await toApiError(res, '요금 설정 저장 실패');
+    return (await res.json()).settings;
   }
 
   async getStorageStatus(): Promise<{

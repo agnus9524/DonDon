@@ -19,6 +19,8 @@ import {
   ExternalLink,
   Menu,
   Users,
+  Bell,
+  Clock,
 } from 'lucide-react';
 
 interface TopNavbarProps {
@@ -31,6 +33,10 @@ interface TopNavbarProps {
   license?: CompanyLicenseInfo | null;
   onOpenRenewLicense?: () => void;
   onOpenTransferOwner?: () => void;
+  onOpenExtensionRequest?: () => void;
+  // 최고관리자: 대기 중인 연장 요청 수와 패널 열기
+  pendingExtensionCount?: number;
+  onOpenSuperPanel?: () => void;
   onSelectCompany: (companyId: string) => void;
   onOpenNewCompanyModal: () => void;
   onOpenCompanySelector: () => void;
@@ -49,6 +55,9 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   license,
   onOpenRenewLicense,
   onOpenTransferOwner,
+  onOpenExtensionRequest,
+  pendingExtensionCount = 0,
+  onOpenSuperPanel,
   onSelectCompany,
   onOpenNewCompanyModal,
   onOpenCompanySelector,
@@ -223,6 +232,23 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           <RefreshCw className="w-4 h-4" />
         </button>
 
+        {/* 최고관리자 알림: 대기 중인 연장 요청 */}
+        {isSuperAdmin && onOpenSuperPanel && (
+          <button
+            onClick={onOpenSuperPanel}
+            className="relative p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors"
+            title={pendingExtensionCount ? `연장 요청 ${pendingExtensionCount}건 대기 중` : '연장 요청 없음'}
+            aria-label="연장 요청 알림"
+          >
+            <Bell className={`w-4 h-4 ${pendingExtensionCount ? 'text-rose-500' : ''}`} />
+            {pendingExtensionCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center">
+                {pendingExtensionCount}
+              </span>
+            )}
+          </button>
+        )}
+
         {/* User Switcher Dropdown */}
         <div className="relative" ref={userRef}>
           <button
@@ -275,16 +301,16 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                       {daysLeft !== null && ` (${daysLeft}일 남음)`}
                     </span>
                   </div>
-                  {license.is_owner && onOpenRenewLicense && (
+                  {license.is_owner && (onOpenExtensionRequest || onOpenRenewLicense) && (
                     <button
                       onClick={() => {
                         setUserDropdownOpen(false);
-                        onOpenRenewLicense();
+                        (onOpenExtensionRequest || onOpenRenewLicense)!();
                       }}
                       className="w-full py-1.5 px-3 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
                     >
-                      <KeyRound className="w-3.5 h-3.5" />
-                      <span>인증키로 기간 연장</span>
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>기간 연장 요청</span>
                     </button>
                   )}
                   {license.is_owner && onOpenTransferOwner && (
