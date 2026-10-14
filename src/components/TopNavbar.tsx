@@ -218,6 +218,47 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
             ID: {currentCompany?.id}
           </span>
         </div>
+
+        {/* 라이선스: 사용 기한 + 기간 연장 요청 + 대표 권한 인계 (항상 보이게) */}
+        {!isSuperAdmin && license && (
+          <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+            <span
+              title={license.expires_at ? `사용 기한 ${new Date(license.expires_at).toLocaleDateString('ko-KR')}` : '사용 기한'}
+              className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg border whitespace-nowrap ${
+                daysLeft !== null && daysLeft <= 7 ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-slate-50 border-slate-200 text-slate-700'
+              }`}
+            >
+              <span className="hidden md:inline text-slate-500 font-semibold">사용 기한</span>
+              <span className="hidden sm:inline">{license.expires_at ? new Date(license.expires_at).toLocaleDateString('ko-KR') : '-'}</span>
+              {daysLeft !== null && (
+                <>
+                  <span className="hidden sm:inline">({daysLeft}일 남음)</span>
+                  <span className="sm:hidden">D-{daysLeft}</span>
+                </>
+              )}
+            </span>
+            {license.is_owner && (onOpenExtensionRequest || onOpenRenewLicense) && (
+              <button
+                onClick={() => (onOpenExtensionRequest || onOpenRenewLicense)!()}
+                title="기간 연장 요청"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold text-xs whitespace-nowrap transition-colors"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span className="hidden xl:inline">기간 연장 요청</span>
+              </button>
+            )}
+            {license.is_owner && onOpenTransferOwner && (
+              <button
+                onClick={onOpenTransferOwner}
+                title="대표 권한 인계"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 font-bold text-xs whitespace-nowrap transition-colors"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span className="hidden xl:inline">대표 권한 인계</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Right: Refresh, User Switcher, Demo info */}
@@ -291,9 +332,9 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                 </div>
               </div>
 
+              {/* 휴대폰: 상단에 자리가 없어 사용자 메뉴에 표시 */}
               {!isSuperAdmin && license && (
-                <div className="px-3 py-2.5 border-b border-slate-100 space-y-1.5">
-                  <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">라이선스</div>
+                <div className="sm:hidden px-3 py-2.5 border-b border-slate-100 space-y-1.5">
                   <div className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-slate-600">사용 기한</span>
                     <span className={`font-bold ${daysLeft !== null && daysLeft <= 7 ? 'text-rose-600' : 'text-slate-900'}`}>
@@ -307,7 +348,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                         setUserDropdownOpen(false);
                         (onOpenExtensionRequest || onOpenRenewLicense)!();
                       }}
-                      className="w-full py-1.5 px-3 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                      className="w-full py-1.5 px-3 rounded-lg bg-indigo-50 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5"
                     >
                       <Clock className="w-3.5 h-3.5" />
                       <span>기간 연장 요청</span>
@@ -319,7 +360,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                         setUserDropdownOpen(false);
                         onOpenTransferOwner();
                       }}
-                      className="w-full py-1.5 px-3 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                      className="w-full py-1.5 px-3 rounded-lg bg-slate-50 text-slate-600 font-bold text-xs flex items-center justify-center gap-1.5"
                     >
                       <Users className="w-3.5 h-3.5" />
                       <span>대표 권한 인계</span>
