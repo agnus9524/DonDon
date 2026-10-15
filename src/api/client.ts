@@ -7,6 +7,8 @@ import {
   Company,
   Team,
   Account,
+  BalanceType,
+  ManagementType,
   BankAccount,
   Vendor,
   Budget,
