@@ -1,10 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
+type BalanceType = 'DEBIT' | 'CREDIT';
+
+type ManagementType =
+  | 'NONE'
+  | 'VENDOR'
+  | 'TEAM'
+  | 'BANK'
+  | 'BUDGET';
 import {
   Company,
   Account,
-  BalanceType,
-  ManagementType,
 } from '../types';
+
 import {
   Layers,
   Plus,
