@@ -71,6 +71,31 @@ async function authFetch(input: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
+export interface CreateAccountRequest {
+  account_code: string;
+
+  account_name: string;
+
+  account_type:
+    | 'ASSET'
+    | 'LIABILITY'
+    | 'EQUITY'
+    | 'REVENUE'
+    | 'EXPENSE'
+    | 'MANUFACTURING'
+    | 'OTHER';
+
+  balance_type?: BalanceType;
+
+  management_type?: ManagementType;
+
+  category?: string;
+
+  description?: string;
+
+  is_active?: boolean;
+}
+
 class ApiClient {
   private currentCompanyId: string = '';
 
@@ -384,7 +409,9 @@ class ApiClient {
     return data.accounts;
   }
 
-  async createAccount(payload: Partial<Account> & { is_active?: boolean }): Promise<Account & { is_active: boolean }> {
+ async createAccount(
+  payload: CreateAccountRequest
+): Promise<Account & { is_active: boolean }> {
     const res = await authFetch('/api/v1/accounts', {
       method: 'POST',
       headers: this.getHeaders(),
@@ -402,7 +429,18 @@ class ApiClient {
     accounts: Array<{
       account_code: string;
       account_name: string;
-      account_type: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
+      account_type:
+  | 'ASSET'
+  | 'LIABILITY'
+  | 'EQUITY'
+  | 'REVENUE'
+  | 'EXPENSE'
+  | 'MANUFACTURING'
+  | 'OTHER';
+
+balance_type?: BalanceType;
+
+management_type?: ManagementType;
       category?: string;
       description?: string;
       is_active?: boolean;
