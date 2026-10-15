@@ -184,6 +184,17 @@ export type BalanceType =
   | 'DEBIT'
   | 'CREDIT';
 
+// 계정과목 계층
+// CATEGORY = 관
+// SUBCATEGORY = 항
+// ITEM = 목
+// SUBITEM = 세목
+export type AccountLevel =
+  | 'CATEGORY'
+  | 'SUBCATEGORY'
+  | 'ITEM'
+  | 'SUBITEM';
+
 export type ManagementType =
   | 'NONE'
   | 'VENDOR'
@@ -199,6 +210,16 @@ export interface Account {
 
   account_name: string;
 
+  // 관 / 항 / 목 / 세목
+  level: AccountLevel;
+
+  // 상위 계정과목
+  // 관은 null 또는 undefined
+  // 항은 관의 id
+  // 목은 항의 id
+  // 세목은 목의 id
+  parent_id?: string | null;
+
   account_type: AccountType;
 
   // 차대구분
@@ -207,16 +228,24 @@ export interface Account {
   // 관리기준
   management_type: ManagementType;
 
-  // 상위계정
-  parent_id?: string;
-
   category: string;
 
+  // 시스템 기본 계정과목 여부
   is_system: boolean;
 
+  // 회사별 계정과목인 경우 회사 ID
   company_id?: string;
 
   is_active?: boolean;
+
+  // 예산 편성 가능 여부
+  is_budgetable?: boolean;
+
+  // 실제 전표 입력 가능 여부
+  is_postable?: boolean;
+
+  // 화면 표시 순서
+  sort_order?: number;
 
   description?: string;
 
