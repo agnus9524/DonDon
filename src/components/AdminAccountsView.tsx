@@ -1,5 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Company, Account } from '../types';
+import {
+  Company,
+  Account,
+  BalanceType,
+  ManagementType,
+} from '../types';
 import {
   Layers,
   Plus,
@@ -49,14 +54,23 @@ interface ParsedAccountRow {
 const loadXLSX = () => import('xlsx');
 
 // 과목구분 글자를 내부 분류로 바꾼다. 알 수 없는 값이면 null (임의로 '비용' 처리하지 않는다)
-function parseAccountType(raw: string): { type: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE'; name: string } | null {
+function parseAccountType(raw: string): { type: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE' | 'MANUFACTURING' | 'OTHER'; name: string } | null {
   const upper = String(raw || '').trim().toUpperCase();
   if (upper.includes('자산') || upper === 'ASSET') return { type: 'ASSET', name: '자산' };
   if (upper.includes('부채') || upper === 'LIABILITY') return { type: 'LIABILITY', name: '부채' };
   if (upper.includes('자본') || upper === 'EQUITY') return { type: 'EQUITY', name: '자본' };
   if (upper.includes('수익') || upper.includes('매출') || upper.includes('수입') || upper === 'REVENUE') return { type: 'REVENUE', name: '수익' };
-  if (upper.includes('비용') || upper.includes('지출') || upper.includes('손실') || upper === 'EXPENSE') return { type: 'EXPENSE', name: '비용' };
-  return null;
+  if (upper.includes('비용') || upper.includes('지출') || upper.includes('손실') || upper === 'EXPENSE')
+  return { type: 'EXPENSE', name: '비용' };
+
+if (upper.includes('제조') || upper === 'MANUFACTURING')
+  return { type: 'MANUFACTURING', name: '제조' };
+
+if (upper.includes('기타') || upper === 'OTHER')
+  return { type: 'OTHER', name: '기타' };
+
+return null;
+
 }
 
 export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
@@ -97,13 +111,30 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
 
   // Create form state
   const [formData, setFormData] = useState({
-    account_code: '',
-    account_name: '',
-    account_type: 'EXPENSE' as 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE',
-    category: '판매관리비',
-    description: '',
-    is_active: true,
-  });
+  account_code: '',
+
+  account_name: '',
+
+  account_type:
+    'EXPENSE' as
+      | 'ASSET'
+      | 'LIABILITY'
+      | 'EQUITY'
+      | 'REVENUE'
+      | 'EXPENSE'
+      | 'MANUFACTURING'
+      | 'OTHER',
+
+  balance_type: 'DEBIT' as BalanceType,
+
+  management_type: 'NONE' as ManagementType,
+
+  category: '판매관리비',
+
+  description: '',
+
+  is_active: true,
+});
 
   // Outside click listener for export dropdown
   useEffect(() => {
@@ -156,13 +187,26 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.account_code.trim() || !formData.account_name.trim() || !onCreateAccount) return;
+    if (!/^\d{6}$/.test(formData.account_code)) {
+  setToast({
+    type: 'error',
+    text: '계정코드는 6자리 숫자여야 합니다.',
+  });
+
+  return;
+}
     try {
       setIsSubmitting(true);
       await onCreateAccount({
-        account_code: formData.account_code.trim(),
-        account_name: formData.account_name.trim(),
-        account_type: formData.account_type,
+  account_code: formData.account_code.trim(),
+
+  account_name: formData.account_name.trim(),
+
+  account_type: formData.account_type,
+
+  balance_type: formData.balance_type,
+
+  management_type: formData.management_type,
         category: formData.category.trim() || (formData.account_type === 'EXPENSE' ? '판관비' : '일반'),
         description: formData.description.trim(),
         is_active: formData.is_active,
@@ -170,13 +214,22 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
       setIsCreateModalOpen(false);
       setToast({ type: 'success', text: `계정과목 [${formData.account_code}] ${formData.account_name}이 등록되었습니다.` });
       setFormData({
-        account_code: '',
-        account_name: '',
-        account_type: 'EXPENSE',
-        category: '판매관리비',
-        description: '',
-        is_active: true,
-      });
+  account_code: '',
+
+  account_name: '',
+
+  account_type: 'EXPENSE',
+
+  balance_type: 'DEBIT',
+
+  management_type: 'NONE',
+
+  category: '판매관리비',
+
+  description: '',
+
+  is_active: true,
+});
     } catch (err: any) {
       setToast({ type: 'error', text: err.message || '계정과목 생성 실패' });
     } finally {
@@ -198,6 +251,20 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
     }
   };
 
+const getBalanceType = (
+  type: string
+): BalanceType => {
+  switch (type) {
+    case 'ASSET':
+    case 'EXPENSE':
+    case 'MANUFACTURING':
+      return 'DEBIT';
+
+    default:
+      return 'CREDIT';
+  }
+};
+  
   const getTypeName = (type: string) => {
     switch (type) {
       case 'ASSET':
@@ -225,7 +292,7 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
       if (type === 'template') {
         const templateData = [
           {
-            계정코드: '101',
+            계정코드: '100101',
             계정과목명: '현금',
             과목구분: '자산',
             세부분류: '당좌자산',
@@ -233,7 +300,7 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
             사용여부: 'Y',
           },
           {
-            계정코드: '103',
+            계정코드: '100102',
             계정과목명: '보통예금',
             과목구분: '자산',
             세부분류: '당좌자산',
@@ -241,7 +308,7 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
             사용여부: 'Y',
           },
           {
-            계정코드: '251',
+            계정코드: '200101',
             계정과목명: '외상매입금',
             과목구분: '부채',
             세부분류: '유동부채',
@@ -249,7 +316,7 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
             사용여부: 'Y',
           },
           {
-            계정코드: '411',
+            계정코드: '400101',
             계정과목명: '상품매출',
             과목구분: '수익',
             세부분류: '매출',
@@ -257,7 +324,7 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
             사용여부: 'Y',
           },
           {
-            계정코드: '501',
+            계정코드: '500101',
             계정과목명: '급여',
             과목구분: '비용',
             세부분류: '판관비',
@@ -265,7 +332,7 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
             사용여부: 'Y',
           },
           {
-            계정코드: '503',
+            계정코드: '500102',
             계정과목명: '복리후생비',
             과목구분: '비용',
             세부분류: '판관비',
@@ -273,7 +340,7 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
             사용여부: 'Y',
           },
           {
-            계정코드: '508',
+            계정코드: '500103',
             계정과목명: '소모품비',
             과목구분: '비용',
             세부분류: '판관비',
@@ -390,6 +457,13 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
           let status: 'NEW' | 'EXISTING' | 'INVALID' = 'NEW';
           let statusReason = '';
 
+if (!/^\d{6}$/.test(code)) {
+  status = 'INVALID';
+
+  statusReason =
+    '계정코드는 6자리 숫자여야 합니다.';
+}
+          
           if (!code || !name) {
             status = 'INVALID';
             statusReason = '계정코드 또는 과목명 누락';
