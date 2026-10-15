@@ -71,10 +71,21 @@ async function authFetch(input: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
+export type AccountLevel =
+  | 'CATEGORY'      // 관
+  | 'SUBCATEGORY'   // 항
+  | 'ITEM'          // 목
+  | 'SUBITEM';      // 세목
+
 export interface CreateAccountRequest {
   account_code: string;
-
   account_name: string;
+
+  // 관 / 항 / 목 / 세목
+  level: AccountLevel;
+
+  // 상위 계정과목
+  parent_id?: string | null;
 
   account_type:
     | 'ASSET'
@@ -86,14 +97,21 @@ export interface CreateAccountRequest {
     | 'OTHER';
 
   balance_type?: BalanceType;
-
   management_type?: ManagementType;
 
   category?: string;
-
   description?: string;
 
+  // 예산 편성 가능 여부
+  is_budgetable?: boolean;
+
+  // 실제 전표 입력 가능 여부
+  is_postable?: boolean;
+
   is_active?: boolean;
+
+  // 계정과목 표시 순서
+  sort_order?: number;
 }
 
 class ApiClient {
@@ -426,36 +444,56 @@ class ApiClient {
   }
 
   async batchCreateAccounts(
-    accounts: Array<{
-      account_code: string;
-      account_name: string;
-      account_type:
-  | 'ASSET'
-  | 'LIABILITY'
-  | 'EQUITY'
-  | 'REVENUE'
-  | 'EXPENSE'
-  | 'MANUFACTURING'
-  | 'OTHER';
+  accounts: Array<{
+    account_code: string;
+    account_name: string;
 
-balance_type?: BalanceType;
+    level: AccountLevel;
+    parent_id?: string | null;
 
-management_type?: ManagementType;
-      report_group?: string;
-      category?: string;
-      description?: string;
-      is_active?: boolean;
-    }>
-  ): Promise<{ success: boolean; created_count: number; skipped_count: number; accounts: (Account & { is_active: boolean })[] }> {
-    const res = await authFetch('/api/v1/accounts/batch', {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify({ accounts }),
-    });
-    if (!res.ok) throw await toApiError(res, '계정과목 일괄 등록에 실패했습니다.');
-    return res.json();
+    account_type:
+      | 'ASSET'
+      | 'LIABILITY'
+      | 'EQUITY'
+      | 'REVENUE'
+      | 'EXPENSE'
+      | 'MANUFACTURING'
+      | 'OTHER';
+
+    balance_type?: BalanceType;
+    management_type?: ManagementType;
+
+    report_group?: string;
+    category?: string;
+    description?: string;
+
+    is_budgetable?: boolean;
+    is_postable?: boolean;
+
+    is_active?: boolean;
+    sort_order?: number;
+  }>
+): Promise<{
+  success: boolean;
+  created_count: number;
+  skipped_count: number;
+  accounts: (Account & { is_active: boolean })[];
+}> {
+  const res = await authFetch('/api/v1/accounts/batch', {
+    method: 'POST',
+    headers: this.getHeaders(),
+    body: JSON.stringify({ accounts }),
+  });
+
+  if (!res.ok) {
+    throw await toApiError(
+      res,
+      '계정과목 일괄 등록에 실패했습니다.'
+    );
   }
 
+  return res.json();
+}
   async deleteAccount(id: string): Promise<void> {
     const res = await authFetch(`/api/v1/accounts/${id}`, {
       method: 'DELETE',
