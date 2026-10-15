@@ -441,6 +441,7 @@ class ApiClient {
 balance_type?: BalanceType;
 
 management_type?: ManagementType;
+      report_group?: string;
       category?: string;
       description?: string;
       is_active?: boolean;
