@@ -478,9 +478,16 @@ function provisionCompany(
       id: `ca_${newCompany.id}_${acc.id}`,
       company_id: newCompany.id,
       account_id: acc.id,
-      is_active: ['101', '103', '251', '253', '331', '4100', '4200', '5100', '5210', '5250'].includes(
-        acc.account_code
-      ),
+      is_active: [
+  '100101',
+  '100102',
+  '200101',
+  '200102',
+  '300101',
+  '400101',
+  '500101',
+  '500102',
+].includes(acc.account_code),
       created_at: now,
     });
   });
@@ -1620,10 +1627,40 @@ async function startServer() {
   const getVisibleAccounts = (companyId: string) =>
     db.accounts.filter((acc) => !acc.company_id || acc.company_id === companyId);
 
-  const ACCOUNT_TYPES = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'] as const;
+  const ACCOUNT_TYPES = [
+  'ASSET',
+  'LIABILITY',
+  'EQUITY',
+  'REVENUE',
+  'EXPENSE',
+  'MANUFACTURING',
+  'OTHER',
+] as const;
   type AccountTypeCode = (typeof ACCOUNT_TYPES)[number];
-  const defaultAccountCategory = (type: string) =>
-    type === 'EXPENSE' ? '판관비' : type === 'REVENUE' ? '사업수익' : '일반';
+ const defaultAccountCategory = (type: string) => {
+  switch (type) {
+    case 'ASSET':
+      return '자산';
+
+    case 'LIABILITY':
+      return '부채';
+
+    case 'EQUITY':
+      return '자본';
+
+    case 'REVENUE':
+      return '사업수익';
+
+    case 'EXPENSE':
+      return '판관비';
+
+    case 'MANUFACTURING':
+      return '제조원가';
+
+    default:
+      return '기타';
+  }
+};
 
   const canManageAccounts = (req: TenantRequest) =>
     !!req.isSuperAdmin || ['ORG_ADMIN', 'ADMIN', 'HQ_ACCOUNTANT'].includes(req.userRole?.role_id || '');
@@ -1646,6 +1683,19 @@ async function startServer() {
 
   // Create new Account Code
   app.post('/api/v1/accounts', requireCompanyAccess, (req: TenantRequest, res: Response) => {
+
+const getBalanceType = (accountType: string) => {
+  switch (accountType) {
+    case 'ASSET':
+    case 'EXPENSE':
+    case 'MANUFACTURING':
+      return 'DEBIT';
+
+    default:
+      return 'CREDIT';
+  }
+};
+    
     const roleId = req.userRole?.role_id;
     if (
       !req.isSuperAdmin &&
@@ -1657,7 +1707,16 @@ async function startServer() {
       return res.status(403).json({ error: '계정과목 생성 권한이 없습니다.' });
     }
 
-    const { account_code, account_name, account_type, category, description, is_active } = req.body;
+    const {
+  account_code,
+  account_name,
+  account_type,
+  balance_type,
+  management_type,
+  category,
+  description,
+  is_active,
+} = req.body;
     if (!account_code || !account_name || !account_type) {
       return res.status(400).json({ error: '계정코드, 계정과목명, 분류(Type)는 필수 항목입니다.' });
     }
@@ -1666,15 +1725,26 @@ async function startServer() {
       return res.status(400).json({ error: '분류(Type)는 자산·부채·자본·수익·비용 중 하나여야 합니다.' });
     }
     const cleanCode = String(account_code).trim();
+    if (!/^\d{6}$/.test(cleanCode)) {
+  return res.status(400).json({
+    error: '계정코드는 6자리 숫자만 입력할 수 있습니다.',
+  });
+}
     if (getVisibleAccounts(req.companyId!).some((a) => a.account_code === cleanCode)) {
       return res.status(400).json({ error: `계정코드 [${cleanCode}]는 이미 등록되어 있습니다.` });
     }
 
     const newAccount: Account = {
-      id: `acc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      account_code: cleanCode,
-      account_name: String(account_name).trim(),
-      account_type,
+  id: `acc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+  account_code: cleanCode,
+  account_name: String(account_name).trim(),
+  account_type,
+
+  balance_type:
+    balance_type || getBalanceType(account_type),
+
+  management_type:
+    management_type || 'NONE',
       category: category || (account_type === 'EXPENSE' ? '판관비' : account_type === 'REVENUE' ? '사업수익' : '일반'),
       description: description || '',
       is_system: false,
@@ -1736,9 +1806,31 @@ async function startServer() {
 
     for (const item of accounts) {
       const code = String(item?.account_code ?? '').trim();
-      const name = String(item?.account_name ?? '').trim();
-      const type = String(item?.account_type ?? '').trim().toUpperCase() as AccountTypeCode;
 
+const name = String(item?.account_name ?? '').trim();
+
+const type = String(item?.account_type ?? '').trim().toUpperCase() as AccountTypeCode;
+
+const balanceType =
+  item?.balance_type ||
+  (type === 'ASSET' ||
+   type === 'EXPENSE' ||
+   type === 'MANUFACTURING'
+    ? 'DEBIT'
+    : 'CREDIT');
+
+const managementType =
+  item?.management_type || 'NONE';
+
+
+if (!/^\d{6}$/.test(code)) {
+  skipped.push({
+    account_code: code,
+    reason: '계정코드는 6자리 숫자여야 합니다.',
+  });
+  continue;
+}
+      
       if (!code || !name) {
         skipped.push({ account_code: code, reason: '계정코드 또는 과목명 누락' });
         continue;
@@ -1755,10 +1847,14 @@ async function startServer() {
 
       const isActive = item.is_active !== false;
       const newAccount: Account = {
-        id: `acc_${Date.now()}_${randomSuffix()}`,
-        account_code: code,
-        account_name: name,
-        account_type: type,
+  id: `acc_${Date.now()}_${randomSuffix()}`,
+  account_code: code,
+  account_name: name,
+  account_type: type,
+
+  balance_type: balanceType,
+
+  management_type: managementType,
         category: String(item.category ?? '').trim() || defaultAccountCategory(type),
         description: String(item.description ?? '').trim(),
         is_system: false,
@@ -2377,8 +2473,10 @@ async function startServer() {
 
     const defaultTeam = db.teams.find((t) => t.company_id === req.companyId);
     const visibleAccounts = getVisibleAccounts(req.companyId!);
-    const defaultExpenseAcc = visibleAccounts.find((a) => a.account_code === '5250') || visibleAccounts.find((a) => a.account_type === 'EXPENSE')!;
-    const defaultIncomeAcc = visibleAccounts.find((a) => a.account_code === '4200') || visibleAccounts.find((a) => a.account_type === 'REVENUE')!;
+    const defaultExpenseAcc =
+  visibleAccounts.find((a) => a.account_code === '500101') || visibleAccounts.find((a) => a.account_type === 'EXPENSE')!;
+    const defaultIncomeAcc =
+  visibleAccounts.find((a) => a.account_code === '400101') || visibleAccounts.find((a) => a.account_type === 'REVENUE')!;
     const bank = db.bankAccounts.find((b) => b.id === importSession.bank_account_id);
 
     const generatedTxs: Transaction[] = [];
