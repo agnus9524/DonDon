@@ -41,7 +41,14 @@ interface ParsedAccountRow {
   rowNum: number;
   code: string;
   name: string;
-  type: 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
+  type:
+  | 'ASSET'
+  | 'LIABILITY'
+  | 'EQUITY'
+  | 'REVENUE'
+  | 'EXPENSE'
+  | 'MANUFACTURING'
+  | 'OTHER';
   typeName: string;
   category: string;
   description: string;
@@ -187,6 +194,14 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+if (
+  !formData.account_code.trim() ||
+  !formData.account_name.trim() ||
+  !onCreateAccount
+) {
+  return;
+}
+    
     if (!/^\d{6}$/.test(formData.account_code)) {
   setToast({
     type: 'error',
@@ -215,14 +230,11 @@ export const AdminAccountsView: React.FC<AdminAccountsViewProps> = ({
       setToast({ type: 'success', text: `계정과목 [${formData.account_code}] ${formData.account_name}이 등록되었습니다.` });
       setFormData({
   account_code: '',
-
   account_name: '',
+  account_type: 'EXPENSE' as const,
+  balance_type: 'DEBIT' as BalanceType,
+  management_type: 'NONE' as ManagementType,
 
-  account_type: 'EXPENSE',
-
-  balance_type: 'DEBIT',
-
-  management_type: 'NONE',
 
   category: '판매관리비',
 
@@ -534,13 +546,24 @@ if (!/^\d{6}$/.test(code)) {
     try {
       setIsImporting(true);
       const payloadList = validRows.map((r) => ({
-        account_code: r.code,
-        account_name: r.name,
-        account_type: r.type,
-        category: r.category,
-        description: r.description,
-        is_active: r.isActive,
-      }));
+  account_code: r.code,
+  account_name: r.name,
+  account_type: r.type,
+
+  balance_type:
+    r.type === 'ASSET' ||
+    r.type === 'EXPENSE' ||
+    r.type === 'MANUFACTURING'
+      ? 'DEBIT'
+      : 'CREDIT',
+
+  management_type: 'NONE',
+
+  category: r.category,
+  description: r.description,
+  is_active: r.isActive,
+}));
+
 
       if (onBatchCreateAccounts) {
         const res = await onBatchCreateAccounts(payloadList);
