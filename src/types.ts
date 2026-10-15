@@ -171,20 +171,55 @@ export interface FiscalPeriod {
 }
 
 // 10. 계정과목 (accounts) - 공통 계정과목
-export type AccountType = 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
+export type AccountType =
+  | 'ASSET'
+  | 'LIABILITY'
+  | 'EQUITY'
+  | 'REVENUE'
+  | 'EXPENSE'
+  | 'MANUFACTURING'
+  | 'OTHER';
+
+export type BalanceType =
+  | 'DEBIT'
+  | 'CREDIT';
+
+export type ManagementType =
+  | 'NONE'
+  | 'VENDOR'
+  | 'TEAM'
+  | 'BANK'
+  | 'BUDGET';
 
 export interface Account {
   id: string;
+
+  // 6자리 계정코드
   account_code: string;
+
   account_name: string;
+
   account_type: AccountType;
+
+  // 차대구분
+  balance_type: BalanceType;
+
+  // 관리기준
+  management_type: ManagementType;
+
+  // 상위계정
   parent_id?: string;
+
   category: string;
+
   is_system: boolean;
-  // 회사가 직접 추가한 계정과목이면 그 회사 ID. 없으면 모든 회사가 함께 쓰는 공통 계정과목.
+
   company_id?: string;
-  is_active?: boolean; // Convenience flag when merged with company_accounts
+
+  is_active?: boolean;
+
   description?: string;
+
   created_at?: string;
   updated_at?: string;
 }
