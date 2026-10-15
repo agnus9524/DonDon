@@ -7,6 +7,7 @@ import {
   Company,
   Team,
   Account,
+  AccountLevel,
   BalanceType,
   ManagementType,
   BankAccount,
@@ -450,6 +451,9 @@ class ApiClient {
 
     level: AccountLevel;
     parent_id?: string | null;
+    is_budgetable?: boolean;
+is_postable?: boolean;
+sort_order?: number;
 
     account_type:
       | 'ASSET'
