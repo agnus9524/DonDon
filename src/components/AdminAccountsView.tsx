@@ -67,14 +67,28 @@ function parseAccountType(raw: string): { type: 'ASSET' | 'LIABILITY' | 'EQUITY'
   if (upper.includes('부채') || upper === 'LIABILITY') return { type: 'LIABILITY', name: '부채' };
   if (upper.includes('자본') || upper === 'EQUITY') return { type: 'EQUITY', name: '자본' };
   if (upper.includes('수익') || upper.includes('매출') || upper.includes('수입') || upper === 'REVENUE') return { type: 'REVENUE', name: '수익' };
-  if (upper.includes('비용') || upper.includes('지출') || upper.includes('손실') || upper === 'EXPENSE')
+ if (
+  upper.includes('비용') ||
+  upper.includes('지출') ||
+  upper.includes('손실') ||
+  upper === 'EXPENSE'
+) {
   return { type: 'EXPENSE', name: '비용' };
+}
 
-if (upper.includes('제조') || upper === 'MANUFACTURING')
+if (
+  upper.includes('제조') ||
+  upper === 'MANUFACTURING'
+) {
   return { type: 'MANUFACTURING', name: '제조' };
+}
 
-if (upper.includes('기타') || upper === 'OTHER')
+if (
+  upper.includes('기타') ||
+  upper === 'OTHER'
+) {
   return { type: 'OTHER', name: '기타' };
+}
 
 return null;
 
